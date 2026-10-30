@@ -21,7 +21,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Callable
 
-from . import gates, report
+from . import gates, report, spec as specmod
 from .ado import COMPLETED, REMAINING, extract_criteria
 from .agents import BASH_DOTNET, AgentError, AgentRunner, ToolPolicy
 from .dotnet import Dotnet
@@ -131,9 +131,20 @@ class Pipeline:
 
     def _work_item_vars(self) -> dict:
         wi = self.wi
+        description = wi.description_text or "(empty)"
+        source = wi.criteria_source
+        if self.state.spec:
+            description += (f"\n\n--- Committed spec {self.state.spec['path']} (reviewed in a pull request; its Non-goals are out of scope) ---\n"
+                            + self.state.spec["text"])
+            if self.state.tracker_criteria:
+                description += ("\n\n--- Acceptance criteria as written in the tracker (compare with the spec's; report any "
+                                "requirement that only appears here) ---\n" + "\n".join(f"- {t}" for t in self.state.tracker_criteria))
+            if any(a.get("source") == "spec" for a in self.state.acs):
+                source = f"the committed spec {self.state.spec['path']}"
         return {"work_item_id": str(self.state.work_item_id), "work_item_type": wi.type, "title": wi.title,
-                "description": wi.description_text or "(empty)", "acceptance_criteria": self.state.acs,
-                "criteria_source": wi.criteria_source,
+                "description": description,
+                "acceptance_criteria": [{k: v for k, v in a.items() if k != "declared"} for a in self.state.acs],
+                "criteria_source": source,
                 "security_criteria": self.state.security or "(none)",
                 "comments": wi.comments or "(none)", "linked": wi.linked or "(none)",
                 "conventions": self._conventions() or ["(none found; follow the surrounding code)"]}
@@ -196,15 +207,59 @@ class Pipeline:
             problems.append(f"type '{self.wi.type}' not in {el['work_item_types']}")
         if self.wi.state not in el["allowed_states"]:
             problems.append(f"state '{self.wi.state}' not in {el['allowed_states']}")
-        self.state.acs = extract_criteria(self.wi.acceptance_html, "AC")
-        self.state.log("eligibility", f"{len(self.state.acs)} acceptance criteria read from {self.wi.criteria_source}")
-        self.state.security = extract_criteria(self.wi.security_html, "SC")
-        if len(self.state.acs) < el["min_acceptance_criteria"]:
+        tracker = extract_criteria(self.wi.acceptance_html, "AC")
+        tracker_security = extract_criteria(self.wi.security_html, "SC")
+        self.state.acs, self.state.security = tracker, tracker_security
+        self.state.log("eligibility", f"{len(tracker)} acceptance criteria read from {self.wi.criteria_source}")
+        committed = self._committed_spec()
+        if committed is not None:
+            problems += self._adopt_spec(committed, tracker, tracker_security)
+        elif self.cfg["spec"]["mode"] == "required":
+            problems.append(f"no committed spec at {self.cfg['spec']['path'].format(id=self.state.work_item_id)}")
+        if committed is None and len(self.state.acs) < el["min_acceptance_criteria"]:
             section = self.cfg["azure_devops"].get("criteria_section", "")
             problems.append(f"no usable acceptance criteria in the Acceptance Criteria field"
                             + (f" or the '{section}' section of the Description" if section else ""))
         if problems:
             raise Escalation("eligibility", "work item is not eligible for autonomous delivery", problems)
+
+    # ===== the committed spec (agentic-SDLC convention) =================================================
+    def _committed_spec(self) -> "specmod.Spec | None":
+        sc = self.cfg["spec"]
+        if sc["mode"] == "off":
+            return None
+        path = sc["path"].format(id=self.state.work_item_id)
+        target = self.cfg["azure_devops"]["target_branch"]
+        try:
+            self.git.fetch(target)                                      # read-only; the spec is read as committed on the base
+        except Exception as e:  # noqa: BLE001 - offline machines still read the local ref
+            self.state.log("eligibility", f"could not fetch {target}: {str(e)[:120]}")
+        raw = self.git.show_file(self.git.base_ref(target), path)
+        return None if raw is None else specmod.parse_spec(raw, path)
+
+    def _adopt_spec(self, sp: "specmod.Spec", tracker: list[dict], tracker_security: list[dict]) -> list[str]:
+        """The spec replaces the tracker's criteria; what the tracker says on top is shown to triage to compare."""
+        sc = self.cfg["spec"]
+        acs: list[dict] = []
+        for declared, texts in (("existing", sp.existing), ("additional", sp.additional)):
+            for text in texts:
+                acs.append({"id": f"AC-{len(acs) + 1}", "text": text, "source": "spec", "declared": declared})
+        norm_text = lambda t: " ".join(t.lower().split())
+        sec = [c["text"] for c in tracker_security]
+        sec += [t for t in sp.security if norm_text(t) not in {norm_text(x) for x in sec}]
+        extra = [c["text"] for c in tracker if not specmod.is_pointer(c["text"], sp.path)]
+        self.state.tracker_criteria = extra
+        self.state.spec = sp.summary()
+        if acs:
+            self.state.acs = acs
+        self.state.security = [{"id": f"SC-{n}", "text": t, "source": "security"} for n, t in enumerate(sec, 1)]
+        self.state.log("eligibility", f"spec {sp.path}: {len(sp.existing)} existing and {len(sp.additional)} additional criteria, "
+                                      f"{len(sp.security)} security, risk tier {sp.risk_tier or 'not set'}"
+                                      + (f"; {len(extra)} tracker criteria shown to triage for comparison" if extra else ""))
+        return specmod.problems(sp, sc["max_risk_tier"], bool(sc["block_on_open_questions"]))
+
+    def _declared(self) -> dict[str, str]:
+        return {a["id"]: a["declared"] for a in self.state.acs if a.get("declared")}
 
     # ===== step 1: branch ==============================================================================
     def prepare(self) -> None:
@@ -293,7 +348,7 @@ class Pipeline:
             checker_files = [f["path"] for f in check.get("files", []) if not match_any(f["path"], s["test_path_globs"])]
             agreement = gates.plan_agreement(gates.plan_files(plan, tests_only=False, cfg=self.cfg), checker_files,
                                              float(self.cfg["plan_check"]["min_file_overlap"]))
-            classification = gates.classification_agreement(plan, check)
+            classification = gates.classification_agreement(plan, check, self._declared())
             last = [shape, classification, agreement]
             self._record(last, f"plan-{attempt}")
             if agreement.passed and classification.passed:

@@ -5,7 +5,7 @@
 #       - repository: autodeliver
 #         type: git
 #         name: <Project>/autodeliver-dotnet
-#         ref: refs/tags/v0.4.0
+#         ref: refs/tags/v0.5.1
 #   jobs:
 #     - template: azure-pipelines/templates/autodeliver-job.yml@autodeliver
 #       parameters: { workItemId: ..., dryRun: ... }

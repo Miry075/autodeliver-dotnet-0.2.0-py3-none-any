@@ -232,3 +232,14 @@ def test_init_process_basic_writes_a_valid_overlay_that_keeps_the_azure_devops_b
     subprocess.run(["git", "init", "-q", "-b", "main", str(default)], check=True)
     assert main(["init", "--repo", str(default)]) == 0
     assert "criteria_section" not in (default / ".autodeliver" / "config.yml").read_text().replace("# ", "").split("dotnet:")[0]
+
+
+def test_skill_frontmatter_is_accepted_by_the_upload_validator():
+    """Claude rejects a skill whose name or description contains angle brackets (read as XML tags)."""
+    import re
+    from conftest import ROOT
+    front = re.match(r"^---\n(.*?)\n---\n", (ROOT / "skill" / "autodeliver-dotnet" / "SKILL.md").read_text(encoding="utf-8"), re.S).group(1)
+    assert not re.search(r"[<>]", front), re.findall(r"<[^>]*>", front)
+    assert len(re.search(r"^description:[ \t]*(.+)$", front, re.M).group(1)) <= 1024
+    import runpy
+    runpy.run_path(str(ROOT / "scripts" / "build_dist.py"), run_name="not_main")["validate"]()

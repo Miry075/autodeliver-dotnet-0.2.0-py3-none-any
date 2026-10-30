@@ -11,6 +11,12 @@ azure_devops:
   acceptance_criteria_field: Microsoft.VSTS.Common.AcceptanceCriteria
   criteria_section: ""                # Basic process (no such field): label of the section of the Description that holds the criteria, e.g. "Acceptance criteria"
 
+spec:                                  # the agentic-SDLC convention: one reviewed spec per work item
+  mode: auto                           # auto = use docs/specs/<id>.md when the repository has it | required | off
+  path: docs/specs/{id}.md
+  max_risk_tier: Medium                # the spec's Risk tier above this needs a human (High = money, personal data, security, irreversible)
+  block_on_open_questions: true
+
 eligibility:
   required_tag: auto-deliver           # opt-in only; nothing runs without this tag
   work_item_types: [User Story, Bug, Task]

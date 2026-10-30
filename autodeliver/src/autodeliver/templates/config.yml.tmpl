@@ -9,6 +9,10 @@ azure_devops:
   repository: {repository}
   target_branch: {target_branch}
 {process_azure}{process_blocks}
+# spec:                            # agentic-SDLC convention: docs/specs/<id>.md, read when the repository has it
+#   mode: auto                     # auto | required | off
+#   max_risk_tier: Medium          # the spec's Risk tier above this stops the run
+
 # dotnet:
 #   solution: MySolution.sln        # only needed when the repo root has several solutions
 

@@ -36,7 +36,7 @@ Manually, or in a pipeline:
 
 ```bash
 # in a virtual environment
-pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.4.0"
+pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.5.1"
 autodeliver --version
 ```
 
@@ -78,6 +78,24 @@ The agents run through the Claude Agent SDK, which uses the Claude Code CLI. It 
 Subscription limits assume ordinary individual use. Anthropic's terms require API keys for products and services built on the Agent SDK, and do not allow routing other people's work through a Pro/Max login, so a pipeline that delivers your colleagues' tickets needs an API key (or the organisation's own plan). One run is 8 or more agent sessions, with Opus for planning and review; on Pro you will reach the session limit quickly, Max is more realistic.
 
 If both variables are set the CLI uses the API key. An undefined pipeline variable arrives as the literal `$(NAME)`; autodeliver removes it so it is never tried as a credential.
+
+## The agentic-SDLC convention (committed specs)
+
+If the repository follows the `agentic-sdlc-starter` convention, each work item has a reviewed spec at `docs/specs/<id>.md`, written from its `TEMPLATE.md`. autodeliver then reads the work item's details from that spec as well as from the ticket:
+
+| From the spec | Used for |
+|---|---|
+| `## Acceptance criteria` | the additional criteria (AC-n, declared *additional*) |
+| `## Existing acceptance criteria` | the regression baseline (AC-n, declared *existing*) |
+| `## Security criteria` | SC-n, merged with the ticket's Security Criteria field |
+| Goal, Use cases, Edge cases, `## Design` | context for every agent |
+| `## Non-goals` | out of scope for every agent |
+| `- **Risk tier:**` | above `spec.max_risk_tier` (default `Medium`) the run stops: money, personal data, security and irreversible operations need a human |
+| `## Open questions` | any unanswered item stops the run |
+
+The declared existing/additional split is a **third vote**: the planner and the independent checker classify every criterion from the code without seeing it, and all three must agree, otherwise the run escalates. The ticket still supplies the title, state, tags, comments, links and hours. When the ticket's own criteria are more than a pointer such as "See docs/specs/42.md.", they are shown to triage, which flags any requirement that appears only there.
+
+The spec is read as committed on the target branch (`git show origin/<branch>:docs/specs/<id>.md`), never from a working tree. Settings: `spec.mode` (`auto` uses the spec when it exists, `required` demands it, `off` ignores it), `spec.path`, `spec.max_risk_tier`, `spec.block_on_open_questions`.
 
 ## Azure DevOps process templates
 

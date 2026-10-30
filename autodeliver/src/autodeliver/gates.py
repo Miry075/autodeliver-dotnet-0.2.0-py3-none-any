@@ -242,13 +242,21 @@ def plan_shape(plan: dict, ac_ids: list[str], cfg: dict, exists) -> GateResult:
     return GateResult("plan_shape", not details, f"{n_files} planned files, {len(use_cases)} use cases", details)
 
 
-def classification_agreement(plan: dict, check: dict) -> GateResult:
-    """Replaces the human confirmation of the existing-AC baseline: two independent classifications must match."""
+def classification_agreement(plan: dict, check: dict, declared: dict[str, str] | None = None) -> GateResult:
+    """Replaces the human confirmation of the existing-AC baseline: two independent classifications must match.
+    When the repository has a reviewed spec, its declared split (Existing vs Acceptance criteria) is a third
+    vote that was confirmed by a human; all three must agree."""
     mine = {a: b["kind"] for a, b in baseline(plan).items()}
     theirs = {c["ac_id"]: c["kind"] for c in check.get("ac_classification", [])}
     details = [f"{a}: plan says {mine.get(a, '-')}, independent check says {theirs.get(a, '-')}"
                for a in sorted(set(mine) | set(theirs)) if mine.get(a) != theirs.get(a)]
-    return GateResult("ac_classification", not details, f"{len(mine)} criteria classified", details)
+    for a, want in sorted((declared or {}).items()):
+        if mine.get(a) == theirs.get(a) and mine.get(a) != want:
+            details.append(f"{a}: the reviewed spec declares it {want}, but plan and independent check both say {mine.get(a, '-')}")
+        elif mine.get(a) != theirs.get(a) and want not in (mine.get(a), theirs.get(a)):
+            details.append(f"{a}: the reviewed spec declares it {want}")
+    note = f", {len(declared)} declared by the spec" if declared else ""
+    return GateResult("ac_classification", not details, f"{len(mine)} criteria classified{note}", details)
 
 
 def plan_agreement(planner: list[str], checker: list[str], threshold: float) -> GateResult:

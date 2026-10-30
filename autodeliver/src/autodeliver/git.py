@@ -81,6 +81,15 @@ class Git:
     def create_branch(self, name: str, start: str) -> None:
         self.run("checkout", "--quiet", "-b", name, start)
 
+    def show_file(self, ref: str, path: str) -> str | None:
+        """Text of `path` as committed at `ref` (falls back to HEAD when the ref does not exist); None when absent."""
+        for candidate in (ref, "HEAD"):
+            if self.run("rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}", check=False).strip():
+                proc = subprocess.run(["git", "show", f"{candidate}:{norm(path)}"], cwd=self.repo, capture_output=True,
+                                      text=True, encoding="utf-8", errors="replace")
+                return proc.stdout if proc.returncode == 0 else None
+        return None
+
     def head(self) -> str:
         return self.resolve("HEAD")
 

@@ -47,6 +47,12 @@ def validate() -> None:
     front = re.match(r"^---\n(.*?)\n---\n", skill_md, re.S)
     if not front or "name: autodeliver-dotnet" not in front.group(1) or "description:" not in front.group(1):
         sys.exit("SKILL.md: frontmatter needs name and description")
+    # Claude's skill upload rejects these; catch them here instead of at upload time.
+    description = re.search(r"^description:[ \t]*(.+)$", front.group(1), re.M).group(1)
+    if re.search(r"[<>]", front.group(1)):
+        sys.exit(f"SKILL.md frontmatter must not contain angle brackets (read as XML tags): {re.findall(r'<[^>]*>', front.group(1))}")
+    if len(description) > 1024:
+        sys.exit(f"SKILL.md description is {len(description)} characters; the limit is 1024")
     for ref in re.findall(r"`(references/[^`]+)`", skill_md):
         if not (SKILL / ref).is_file():
             sys.exit(f"SKILL.md references missing file {ref}")

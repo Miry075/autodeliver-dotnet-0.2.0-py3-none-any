@@ -24,7 +24,7 @@ def git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
 
 
-def make_repo(tmp: Path, with_origin: bool = False) -> Path:
+def make_repo(tmp: Path, with_origin: bool = False, files: dict[str, str] | None = None) -> Path:
     repo = tmp / "repo"
     (repo / "src" / "Care").mkdir(parents=True)
     (repo / "tests" / "Care.Tests").mkdir(parents=True)
@@ -32,6 +32,9 @@ def make_repo(tmp: Path, with_origin: bool = False) -> Path:
     (repo / "AGENTS.md").write_text("conventions")
     (repo / "src" / "Care" / "Episode.cs").write_text("public class Episode { }\n")
     (repo / "tests" / "Care.Tests" / "EpisodeTests.cs").write_text("public class EpisodeTests { }\n")
+    for rel, text in (files or {}).items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "t@example.com")
     git(repo, "config", "user.name", "t")
@@ -131,8 +134,9 @@ class FakeAgents:
             "reviewer": lambda: {
                 "verdict": "APPROVE",
                 "existing_ac_assessment": [{"ac_id": "AC-1", "holds": True, "evidence": "Edit_WhenOpen_StoresNote"}],
-                "ac_assessment": [{"ac_id": "AC-2", "met": True, "evidence": "Edit_WhenClosed_Throws"},
-                                  {"ac_id": "SC-1", "met": True, "evidence": "Episode.cs:12 audit call"}],
+                "ac_assessment": [{"ac_id": "AC-2", "met": True, "evidence": "Edit_WhenClosed_Throws"}] +
+                                 [{"ac_id": sc["id"], "met": True, "evidence": "Episode.cs:12 audit call"}
+                                  for sc in (variables.get("security_criteria") if isinstance(variables.get("security_criteria"), list) else [])],
                 "use_case_assessment": [{"uc_id": "UC-1", "status": "met", "evidence": "t"}, {"uc_id": "UC-2", "status": "met", "evidence": "t"}],
                 "findings": [], "health_sweep": SWEEP,
                 "design_principles": [{"principle": "Aggregate invariant", "how": "guard in Episode.Edit"}],
@@ -158,8 +162,9 @@ class FakeAgents:
         return AgentResult(result, 0.10, 3, "s", [])
 
 
-def run_pipeline(tmp_path: Path, cfg, behaviour="good", *, dry_run=True, with_origin=False, checker_ac1="existing", story=None):
-    repo = make_repo(tmp_path, with_origin)
+def run_pipeline(tmp_path: Path, cfg, behaviour="good", *, dry_run=True, with_origin=False, checker_ac1="existing", story=None,
+                 files=None):
+    repo = make_repo(tmp_path, with_origin, files)
     ado = OfflineAzureDevOps(story or STORY, cfg["azure_devops"].get("criteria_section", ""))    # as the CLI does
     agents = FakeAgents(repo, behaviour, checker_ac1)
     p = Pipeline(cfg, repo, 4242, ado, agents, dry_run=dry_run, dotnet_factory=lambda: FakeDotnet(repo))
@@ -355,3 +360,96 @@ def test_basic_process_is_still_rejected_with_the_defaults(tmp_path, cfg):
     p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, story=story)
     text = (repo / ".work/autodeliver/4242/escalation.md").read_text()
     assert code == 2 and "type 'Issue'" in text and "state 'To Do'" in text and "no usable acceptance criteria" in text
+
+
+# --- v0.5.0: committed spec (agentic-SDLC convention) ---------------------------------------------------
+SPEC = """# 4242: Refuse edits on closed episodes
+
+- **Work item:** 4242
+- **Risk tier:** Medium
+
+## Goal
+
+Closed care episodes are legal records and must be read-only.
+
+## Existing acceptance criteria
+
+- Editing an open episode succeeds and stores the note (src/Care/Episode.cs:1)
+
+## Acceptance criteria
+
+1. Given a closed episode, when it is edited, then a domain error is raised.
+
+## Use cases
+
+- A clinician edits a closed episode by mistake.
+
+## Non-goals
+
+- Reopening closed episodes.
+
+## Security criteria
+
+- Refusals are written to the audit log
+
+## Open questions
+
+- None
+"""
+SPEC_FILE = "docs/specs/4242.md"
+
+
+def test_committed_spec_supplies_criteria_security_context_and_the_declared_baseline(tmp_path, cfg):
+    story = {**STORY, "acceptance_criteria": ["See docs/specs/4242.md."], "security_criteria": ["Refusals are written to the audit log",
+                                                                                              "Edits are rate limited"]}
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, story=story, files={SPEC_FILE: SPEC})
+    assert code == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text() if code else ""
+    assert [(a["id"], a["declared"]) for a in p.state.acs] == [("AC-1", "existing"), ("AC-2", "additional")]
+    assert p.state.acs[0]["text"].startswith("Editing an open episode succeeds") and p.state.tracker_criteria == []
+    assert [s["text"] for s in p.state.security] == ["Refusals are written to the audit log", "Edits are rate limited"]
+    for role in ("triage", "planner", "plan_checker", "reviewer"):
+        v = agents.variables[role]
+        assert "Committed spec docs/specs/4242.md" in v["description"] and "Reopening closed episodes" in v["description"]
+        assert all("declared" not in a for a in v["acceptance_criteria"])                # the declaration is a separate vote
+        assert "committed spec" in v["criteria_source"] or role not in ("triage",)
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_spec_declaration_that_the_code_contradicts_escalates_the_baseline(tmp_path, cfg):
+    wrong = SPEC.replace("- Editing an open episode succeeds and stores the note (src/Care/Episode.cs:1)\n", "- None: new implementation\n") \
+                .replace("1. Given a closed episode", "1. Editing an open episode succeeds and stores the note.\n2. Given a closed episode")
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, files={SPEC_FILE: wrong})
+    text = (repo / ".work/autodeliver/4242/escalation.md").read_text()
+    assert code == 2 and p.state.stage == "plan" and "the reviewed spec declares it additional" in text
+    assert agents.calls.count("developer") == 0
+
+
+def test_risk_tier_and_open_questions_stop_the_run_before_any_agent_runs(tmp_path, cfg):
+    for broken, needle in ((SPEC.replace("Medium", "High"), "above spec.max_risk_tier"),
+                           (SPEC.replace("- None\n", "- Who may reopen after 30 days?\n"), "Who may reopen after 30 days?"),
+                           (SPEC.replace("- **Risk tier:** Medium\n", ""), "Risk tier is missing")):
+        sub = tmp_path / needle[:6].strip().replace(" ", "_")
+        sub.mkdir()
+        p, code, repo, ado, agents = run_pipeline(sub, cfg, files={SPEC_FILE: broken})
+        assert code == 2 and p.state.stage == "eligibility" and agents.calls == []
+        assert needle in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+
+
+def test_spec_off_ignores_it_and_required_demands_it(tmp_path, cfg):
+    cfg["spec"]["mode"] = "off"
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, files={SPEC_FILE: SPEC.replace("Medium", "High")})
+    assert code == 0 and p.state.spec is None and all("declared" not in a for a in p.state.acs)
+    sub = tmp_path / "req"
+    sub.mkdir()
+    cfg["spec"]["mode"] = "required"
+    p, code, repo, ado, agents = run_pipeline(sub, cfg)
+    assert code == 2 and "no committed spec at docs/specs/4242.md" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+
+
+def test_tracker_criteria_that_differ_from_the_spec_are_shown_to_triage(tmp_path, cfg):
+    story = {**STORY, "acceptance_criteria": ["Editing a closed episode is refused with a domain error",
+                                              "A supervisor can still edit closed episodes within 24 hours"]}
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, story=story, files={SPEC_FILE: SPEC})
+    assert code == 0 and len(p.state.tracker_criteria) == 2
+    d = agents.variables["triage"]["description"]
+    assert "Acceptance criteria as written in the tracker" in d and "within 24 hours" in d

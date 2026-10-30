@@ -632,3 +632,65 @@ def test_azure_devops_reader_takes_criteria_from_the_description(monkeypatch, cf
     assert len(_lis(wi.acceptance_html)) == 2 and "section of the Description" in wi.criteria_source
     cfg["azure_devops"]["criteria_section"] = ""
     assert AzureDevOps(cfg).criteria_section == ""
+
+
+# --- v0.5.0: the committed spec of the agentic-SDLC convention (docs/specs/<id>.md) ---------------------
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_parse_the_starters_sample_spec():
+    from autodeliver.spec import parse_spec
+    sp = parse_spec((FIXTURES / "spec_42.md").read_text(), "docs/specs/42.md")
+    assert sp.title == "Issue a credit note for an invoice" and sp.risk_tier == "High"
+    assert sp.existing == [] and len(sp.additional) == 3 and sp.additional[0].startswith("Given an issued invoice")
+    assert sp.security == [] and sp.open_questions == []
+    assert "Refunding money" in sp.sections["non_goals"] and len(sp.sections["edge_cases"].splitlines()) == 2
+
+
+def test_parse_the_unfilled_template_finds_nothing_real():
+    from autodeliver.spec import parse_spec, problems
+    sp = parse_spec((FIXTURES / "spec_template.md").read_text(), "docs/specs/1.md")
+    assert sp.risk_tier is None and sp.existing == [] and sp.additional == [] and sp.security == []
+    assert sp.open_questions == []                                                 # the template's own guidance is not a question
+    assert any("Risk tier is missing" in p for p in problems(sp, "Medium", True))
+    assert any("nothing to build" in p for p in problems(sp, "Medium", True))
+
+
+def test_spec_sections_existing_security_open_questions_and_tiers():
+    from autodeliver.spec import parse_spec, problems
+    raw = ("# 7: Reopen an episode\n\n- **Risk tier:** Medium\n\n## Existing acceptance criteria\n\n"
+           "- A closed episode is read-only (src/Care/Episode.cs:12)\n- Audit rows are append-only (src/Care/Audit.cs:30)\n\n"
+           "## Acceptance criteria\n\n1. Given a closed episode, when a supervisor reopens it, then it becomes editable.\n\n"
+           "## Security criteria\n\n- Reopening is written to the audit log\n\n## Open questions\n\n- None\n")
+    sp = parse_spec(raw, "docs/specs/7.md")
+    assert len(sp.existing) == 2 and len(sp.additional) == 1 and sp.security == ["Reopening is written to the audit log"]
+    assert sp.open_questions == [] and problems(sp, "Medium", True) == []
+    assert any("above spec.max_risk_tier" in p for p in problems(sp, "Low", True))
+    open_q = parse_spec(raw.replace("- None\n", "- Who may reopen after 30 days?\n"), "docs/specs/7.md")
+    assert open_q.open_questions == ["Who may reopen after 30 days?"]
+    assert any("open question" in p for p in problems(open_q, "Medium", True)) and problems(open_q, "Medium", False) == []
+
+
+def test_tracker_pointer_to_the_spec_is_not_a_criterion():
+    from autodeliver.spec import is_pointer
+    assert is_pointer("See docs/specs/42.md.", "docs/specs/42.md") and is_pointer("details in specs/42.md", "docs/specs/42.md")
+    assert not is_pointer("An empty name is rejected", "docs/specs/42.md")
+
+
+def test_classification_gate_counts_the_spec_declaration_as_a_third_vote():
+    plan = {"ac_baseline": [{"ac_id": "AC-1", "kind": "existing"}, {"ac_id": "AC-2", "kind": "additional"}]}
+    check = {"ac_classification": [{"ac_id": "AC-1", "kind": "existing"}, {"ac_id": "AC-2", "kind": "additional"}]}
+    assert gates.classification_agreement(plan, check).passed
+    assert gates.classification_agreement(plan, check, {"AC-1": "existing", "AC-2": "additional"}).passed
+    wrong = gates.classification_agreement(plan, check, {"AC-1": "existing", "AC-2": "existing"})
+    assert not wrong.passed and "reviewed spec declares it existing" in wrong.details[0]
+    split = {"ac_classification": [{"ac_id": "AC-1", "kind": "additional"}, {"ac_id": "AC-2", "kind": "additional"}]}
+    assert not gates.classification_agreement(plan, split, {"AC-1": "existing"}).passed
+
+
+def test_spec_config_values_are_validated(cfg):
+    for key, bad in (("mode", "sometimes"), ("path", "docs/spec.md"), ("max_risk_tier", "Severe")):
+        broken = copy.deepcopy(cfg)
+        broken["spec"][key] = bad
+        with pytest.raises(ConfigError, match="spec"):
+            validate(broken)

@@ -24,7 +24,7 @@ ADDITIVE_ONLY = {
 MANDATORY_DENY = [".autodeliver/**", ".azuredevops/**"]
 
 REQUIRED_SECTIONS = [
-    "azure_devops", "eligibility", "branch", "commit", "scope", "dotnet", "tests", "mutation", "phi",
+    "azure_devops", "spec", "eligibility", "branch", "commit", "scope", "dotnet", "tests", "mutation", "phi",
     "sonar", "loops", "models", "budget", "plan_check", "on_escalate", "on_success", "tools",
 ]
 REQUIRED_LOOPS = ["plan", "tests", "dev", "review", "quality"]
@@ -90,6 +90,13 @@ def validate(cfg: dict[str, Any], *, require_remote: bool = True) -> None:
         raise ConfigError("models.planner and models.plan_checker must differ (decorrelated check)")
     if cfg["models"]["developer"] == cfg["models"]["reviewer"]:
         raise ConfigError("models.developer and models.reviewer must differ (decorrelated review)")
+    sp = cfg["spec"]
+    if sp["mode"] not in ("auto", "required", "off"):
+        raise ConfigError("spec.mode must be auto, required or off")
+    if "{id}" not in str(sp["path"]):
+        raise ConfigError("spec.path must contain {id}, e.g. docs/specs/{id}.md")
+    if str(sp["max_risk_tier"]).lower() not in ("low", "medium", "high"):
+        raise ConfigError("spec.max_risk_tier must be Low, Medium or High")
     if not 0 < float(cfg["plan_check"]["min_file_overlap"]) <= 1:
         raise ConfigError("plan_check.min_file_overlap must be in (0, 1]")
     if cfg["on_escalate"].get("push_branch"):

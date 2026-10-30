@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.1
+- Skill upload: the skill description contained `<ID>`, which Claude's upload validator rejects as an XML tag ("SKILL.md description cannot contain XML tags"). Replaced by a plain example, and `scripts/build_dist.py` now fails the build on angle brackets or a description over 1024 characters.
+
+## 0.5.0
+
+### Committed specs (agentic-SDLC convention: `docs/specs/<work-item-id>.md`)
+- When the target branch has the spec, autodeliver reads the work item's details from it as well as from the ticket: Acceptance criteria and Existing acceptance criteria become AC-n (declared *additional* / *existing*), Security criteria are merged into SC-n, and Goal, Use cases, Edge cases, Design and Non-goals are given to every agent (Non-goals are out of scope).
+- The spec's declared existing/additional split is a third vote in the baseline gate, next to the planner and the independent checker; any disagreement escalates.
+- A Risk tier above `spec.max_risk_tier` (default Medium), a missing Risk tier, unanswered Open questions and a spec without additional criteria stop the run before any agent runs.
+- Tracker criteria that are more than a pointer to the spec are shown to triage for comparison.
+- New `spec:` settings: `mode` (auto, required, off), `path`, `max_risk_tier`, `block_on_open_questions`. The template's own guidance sentences are not mistaken for content.
+
 ## 0.4.0
 
 ### Azure DevOps Basic process (Epic / Issue / Task, To Do / Doing / Done, no Acceptance Criteria field)
