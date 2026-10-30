@@ -73,6 +73,8 @@ dotnet:
   solution: ""                         # empty = the single *.sln / *.slnx at repo root
   configuration: Release
   fail_on_new_warnings: true
+  test_runner: auto                    # auto = read global.json ("test": {"runner": "Microsoft.Testing.Platform"}) | vstest | mtp
+  mtp_filter_option: --filter-trait    # xunit.v3 on Microsoft.Testing.Platform; takes NAME=VALUE
   env:
     DOTNET_CLI_UI_LANGUAGE: en
     DOTNET_NOLOGO: "1"

@@ -313,3 +313,18 @@ def test_escalation_comment_withholds_flagged_questions(tmp_path, cfg):
     comment = ado.writes[0][1]
     assert niss not in comment and "withheld" in comment and "Is the guard per episode?" in comment
     assert niss in (repo / ".work/autodeliver/4242/escalation.md").read_text()     # full text kept in the run record
+
+
+def test_pipeline_runs_in_a_linked_git_worktree(tmp_path, cfg):
+    """`.git` is a file there. Used to keep a developer's unfinished work out of the run."""
+    main = make_repo(tmp_path)
+    (main / "src" / "Care" / "Episode.cs").write_text("// unfinished local edit\n")           # dirty main checkout
+    wt = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", "--detach", str(wt), "HEAD")
+    assert (wt / ".git").is_file()
+    ado = OfflineAzureDevOps(STORY)
+    agents = FakeAgents(wt)
+    p = Pipeline(cfg, wt, 4242, ado, agents, dry_run=True, dotnet_factory=lambda: FakeDotnet(wt))
+    assert p.run() == 0, (wt / ".work/autodeliver/4242/escalation.md").read_text()
+    assert git(wt, "log", "--format=%s", "-1").startswith("feat: refuse edits on closed episodes (AB#4242)")
+    assert (main / "src" / "Care" / "Episode.cs").read_text() == "// unfinished local edit\n"    # untouched

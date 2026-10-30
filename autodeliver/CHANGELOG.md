@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1
+
+### Microsoft.Testing.Platform (xunit.v3, `"test": {"runner": ...}` in global.json)
+- autodeliver ran `dotnet test … --logger trx --filter …`, which the new runner rejects, so every run would have stopped at the baseline check. The runner is now detected from `global.json` (`dotnet.test_runner: auto | vstest | mtp`) and called as `dotnet test --solution … --filter-trait NAME=VALUE`. Results come from the console summary (total / failed / succeeded), and a missing summary, a rejected command line or a non-zero exit code is never a pass.
+- `autodeliver doctor --probe-tests` builds and runs the tests once, plus a filter that matches nothing, so the runner support is verified on the machine before a real run.
+- `dotnet.mtp_filter_option` (default `--filter-trait`) can be changed if another framework needs a different option.
+
+### Test libraries
+- NSubstitute is no longer assumed. The test-author prompt and the testing standard say to use the mocking library the repository already references, else hand-written fakes, and never to add a package. `doctor` requires xUnit and only reports the mocking library.
+
+### Other
+- Runs in a linked git worktree (`.git` is a file there) instead of crashing when writing the local exclude file, so unfinished work in the main checkout can stay where it is.
+
 ## 0.3.0
 
 ### Claude subscription login
@@ -15,4 +28,5 @@
 - PR title, PR summary, the evidence-pack PR thread and escalation comments are PHI-scanned like the commit message; flagged text is withheld (the full text stays in the run record).
 
 ### Other
+- `scripts/install.sh`: one-command install for macOS and Linux (private venv in `~/.autodeliver`, `autodeliver` on PATH, `--github`, `--uninstall`).
 - No more pytest collection warning for `dotnet.TestResult`.

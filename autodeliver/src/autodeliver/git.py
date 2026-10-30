@@ -46,7 +46,10 @@ class Git:
 
     # --- safety -----------------------------------------------------------------------------
     def ensure_work_dir_excluded(self) -> None:
-        exclude = self.repo / ".git" / "info" / "exclude"
+        # --git-path also works in a linked worktree, where `.git` is a file, not a directory.
+        exclude = Path(self.run("rev-parse", "--git-path", "info/exclude").strip())
+        if not exclude.is_absolute():
+            exclude = self.repo / exclude
         exclude.parent.mkdir(parents=True, exist_ok=True)
         current = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
         missing = [p for p in LOCAL_EXCLUDES if p not in current.splitlines()]

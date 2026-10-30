@@ -34,6 +34,7 @@ class TestResult:
     failed: int = 0
     failed_tests: list[str] = field(default_factory=list)
     tail: str = ""
+    code: int | None = None        # exit code of `dotnet test` (None for fakes)
 
 
 @dataclass
@@ -87,6 +88,48 @@ def mutation_score(report: dict) -> tuple[float | None, int, int]:
     return (round(100.0 * detected / total, 1) if total else None), detected, undetected
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_MTP_COUNT = {k: re.compile(rf"^\s*{k}:\s*(\d+)\s*$", re.M) for k in ("total", "failed", "succeeded", "skipped")}
+_MTP_FAILED_LINE = re.compile(r"^\s*failed (?!:)(.+?) \(\d[^()\n]*\)\s*$", re.M)   # "(12ms)", "(1s 3ms)"
+MTP_RUNNER = "Microsoft.Testing.Platform"
+# dotnet test exit codes in Microsoft.Testing.Platform mode
+MTP_ZERO_TESTS = 8
+
+
+def detect_runner(repo: Path, configured: str = "auto") -> str:
+    """'vstest' or 'mtp'. `dotnet test` takes its mode from the `test.runner` entry in global.json (.NET 10 SDK)."""
+    if configured in ("vstest", "mtp"):
+        return configured
+    gj = Path(repo) / "global.json"
+    try:
+        text = gj.read_text(encoding="utf-8-sig")
+    except OSError:
+        return "vstest"
+    return "mtp" if re.search(r'"runner"\s*:\s*"' + re.escape(MTP_RUNNER) + '"', text, re.I) else "vstest"
+
+
+def parse_mtp_output(output: str, code: int | None = None) -> TestResult:
+    """Counts from the summary `dotnet test` prints in Microsoft.Testing.Platform mode:
+
+        Test run summary: Passed!
+          total: 380
+          failed: 0
+          succeeded: 380
+          skipped: 0
+
+    The last summary block wins. No summary (zero tests ran, crash, bad option) is never a pass."""
+    text = _ANSI.sub("", output)
+    block = text[text.rfind("Test run summary"):] if "Test run summary" in text else ""
+    counts = {k: (int(m.group(1)) if (m := rx.search(block)) else None) for k, rx in _MTP_COUNT.items()}
+    if counts["total"] is None:
+        return TestResult(ok=False, tail=text[-4000:], code=code)
+    failed = counts["failed"] or 0
+    passed = counts["succeeded"] or 0
+    names = sorted(dict.fromkeys(m.group(1) for m in _MTP_FAILED_LINE.finditer(text)))[:50]
+    return TestResult(ok=(code in (0, None)) and failed == 0, total=counts["total"], executed=passed + failed,
+                      passed=passed, failed=failed, failed_tests=names, tail=text[-4000:], code=code)
+
+
 def detect_solution(repo: Path, configured: str) -> str:
     if configured:
         return configured
@@ -102,6 +145,7 @@ class Dotnet:
         self.cfg = cfg
         self.solution = detect_solution(self.repo, cfg["dotnet"].get("solution", ""))
         self.configuration = cfg["dotnet"]["configuration"]
+        self.runner = detect_runner(self.repo, cfg["dotnet"].get("test_runner", "auto"))
         # Build and tests execute agent-written code: they never see pipeline secrets.
         inherited = {k: v for k, v in os.environ.items() if k not in SECRET_ENV}
         self.env = {**inherited, **{k: str(v) for k, v in cfg["dotnet"].get("env", {}).items()}, "MSBUILDTERMINALLOGGER": "off"}
@@ -116,15 +160,30 @@ class Dotnet:
         warnings, errors = parse_build_counts(out)
         return BuildResult(ok=code == 0 and errors == 0, warnings=warnings, errors=errors, tail=out[-4000:])
 
-    def test(self, results_dir: Path, test_filter: str | None = None) -> TestResult:
-        if results_dir.exists():
-            shutil.rmtree(results_dir)
+    def test_args(self, results_dir: Path, test_filter: str | None = None) -> list[str]:
+        """`test_filter` is a trait filter written NAME=VALUE (e.g. AC=AC-1) in both runner modes."""
+        if self.runner == "mtp":
+            # Microsoft.Testing.Platform: no --logger/--filter/-v; the solution goes behind --solution.
+            args = ["dotnet", "test", "--solution", self.solution, "-c", self.configuration, "--no-build", "--nologo",
+                    "--results-directory", str(results_dir)]
+            if test_filter:
+                args += [self.cfg["dotnet"].get("mtp_filter_option", "--filter-trait"), test_filter]
+            return args
         args = ["dotnet", "test", self.solution, "-c", self.configuration, "--no-build", "--nologo", "-v", "q",
                 "--logger", "trx", "--results-directory", str(results_dir)]
         if test_filter:
             args += ["--filter", test_filter]
-        code, out = self._run(args)
-        result = parse_trx_dir(results_dir) if results_dir.exists() else TestResult(ok=False)
+        return args
+
+    def test(self, results_dir: Path, test_filter: str | None = None) -> TestResult:
+        if results_dir.exists():
+            shutil.rmtree(results_dir)
+        code, out = self._run(self.test_args(results_dir, test_filter))
+        if self.runner == "mtp":
+            result = parse_mtp_output(out, code)
+        else:
+            result = parse_trx_dir(results_dir) if results_dir.exists() else TestResult(ok=False)
+            result.code = code
         if code != 0 and result.failed == 0 and result.executed > 0:
             result.ok = False                       # host crash / infra error after tests ran: fail closed
         if test_filter is None and result.executed == 0:

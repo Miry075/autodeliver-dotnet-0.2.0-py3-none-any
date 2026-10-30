@@ -422,3 +422,111 @@ def test_doctor_ci_accepts_a_subscription_token(tmp_path, monkeypatch, capsys):
     main(["doctor", "--ci", "--repo", str(tmp_path)])
     line = next(l for l in capsys.readouterr().out.splitlines() if "Claude credentials" in l)
     assert line.startswith("OK") and "CLAUDE_CODE_OAUTH_TOKEN" in line and "subscription" in line
+
+
+# --- v0.3.0: Microsoft.Testing.Platform (xunit.v3 with "test": {"runner": ...} in global.json) --------
+MTP_OK = """Running tests from tests/Lalana.Connect.Tests/bin/Debug/net10.0/Lalana.Connect.Tests.dll (net10.0|arm64)
+tests/Lalana.Connect.Tests/bin/Debug/net10.0/Lalana.Connect.Tests.dll (net10.0|arm64) passed (23s 319ms)
+
+Test run summary: Passed!
+  total: 380
+  failed: 0
+  succeeded: 380
+  skipped: 0
+  duration: 23s 738ms
+"""
+MTP_FAILED = """  failed Lalana.Connect.Tests.InvoiceTests.Rejects_empty_vat (12ms)
+    Assert.Equal() Failure
+  failed Lalana.Connect.Tests.InvoiceTests.Totals_round (1s 3ms)
+
+Test run summary: Failed!
+  total: 380
+  failed: 2
+  succeeded: 377
+  skipped: 1
+  duration: 24s 1ms
+"""
+GLOBAL_MTP = '{\n  "sdk": {"version": "10.0.100", "rollForward": "latestFeature"},\n  "test": {"runner": "Microsoft.Testing.Platform"}\n}'
+
+
+def test_parse_mtp_summary_from_real_output():
+    from autodeliver.dotnet import parse_mtp_output
+    r = parse_mtp_output(MTP_OK, 0)
+    assert (r.ok, r.total, r.executed, r.passed, r.failed, r.code) == (True, 380, 380, 380, 0, 0)
+    bad = parse_mtp_output(MTP_FAILED, 2)
+    assert (bad.ok, bad.executed, bad.passed, bad.failed) == (False, 379, 377, 2)
+    assert bad.failed_tests == ["Lalana.Connect.Tests.InvoiceTests.Rejects_empty_vat", "Lalana.Connect.Tests.InvoiceTests.Totals_round"]
+
+
+def test_parse_mtp_never_passes_without_a_summary_or_with_a_bad_exit_code():
+    from autodeliver.dotnet import MTP_ZERO_TESTS, parse_mtp_output
+    assert not parse_mtp_output("Zero tests ran", MTP_ZERO_TESTS).ok                       # filter matched nothing
+    assert not parse_mtp_output("error: Unknown option '--logger'", 5).ok                  # rejected command line
+    assert not parse_mtp_output(MTP_OK, 2).ok                                              # summary says passed, process did not
+    assert parse_mtp_output("\x1b[32m" + MTP_OK.replace("Passed!", "\x1b[32mPassed!\x1b[0m"), 0).ok   # colour codes
+
+
+def test_runner_detection_from_global_json(tmp_path):
+    from autodeliver.dotnet import detect_runner
+    assert detect_runner(tmp_path) == "vstest"                                              # no global.json
+    (tmp_path / "global.json").write_text('{"sdk": {"version": "10.0.100"}}')
+    assert detect_runner(tmp_path) == "vstest"
+    (tmp_path / "global.json").write_text(GLOBAL_MTP)
+    assert detect_runner(tmp_path) == "mtp"
+    assert detect_runner(tmp_path, "vstest") == "vstest"                                    # explicit config wins
+    (tmp_path / "global.json").write_text("﻿// comment\n" + GLOBAL_MTP)               # BOM + comment are legal
+    assert detect_runner(tmp_path) == "mtp"
+
+
+def test_dotnet_test_command_per_runner(tmp_path, cfg):
+    from autodeliver.dotnet import Dotnet
+    (tmp_path / "App.slnx").write_text("<Solution/>")
+    vs = Dotnet(tmp_path, cfg)
+    assert vs.runner == "vstest" and "--logger" in vs.test_args(tmp_path / "r", "AC=AC-1") and "--filter" in vs.test_args(tmp_path / "r", "AC=AC-1")
+    (tmp_path / "global.json").write_text(GLOBAL_MTP)
+    mtp = Dotnet(tmp_path, cfg)
+    args = mtp.test_args(tmp_path / "r", "AC=AC-1")
+    assert args[:4] == ["dotnet", "test", "--solution", "App.slnx"] and "--no-build" in args
+    assert args[-2:] == ["--filter-trait", "AC=AC-1"]
+    assert "--logger" not in args and "--filter" not in args and "-v" not in args           # all rejected by the new runner
+
+
+def test_dotnet_test_reads_mtp_console_summary(tmp_path, cfg, monkeypatch):
+    from autodeliver.dotnet import Dotnet
+    (tmp_path / "App.slnx").write_text("<Solution/>")
+    (tmp_path / "global.json").write_text(GLOBAL_MTP)
+    d = Dotnet(tmp_path, cfg)
+    monkeypatch.setattr(d, "_run", lambda args, timeout_s=3600: (0, MTP_OK))
+    r = d.test(tmp_path / "r")
+    assert r.ok and r.executed == 380 and r.code == 0
+    monkeypatch.setattr(d, "_run", lambda args, timeout_s=3600: (8, "Zero tests ran"))
+    none = d.test(tmp_path / "r", "AC=AC-9")
+    assert not none.ok and none.executed == 0 and none.code == 8                           # red, not a crash
+    monkeypatch.setattr(d, "_run", lambda args, timeout_s=3600: (0, "no summary at all"))
+    assert not d.test(tmp_path / "r").ok                                                    # empty full run proves nothing
+
+
+def test_agents_may_run_the_mtp_test_command(tmp_path):
+    p = ToolPolicy(tmp_path, bash_allow=BASH_DOTNET)
+    assert p.decide("Bash", {"command": 'dotnet test --solution LalanaConnect.slnx --no-build --filter-trait "AC=AC-1"'})[0]
+    assert not p.decide("Bash", {"command": "dotnet test --solution ../other.slnx"})[0]
+
+
+def test_doctor_test_stack_xunit_required_mocking_reported(tmp_path):
+    from autodeliver.cli import _test_stack
+    tests = tmp_path / "tests" / "App.Tests"
+    tests.mkdir(parents=True)
+    (tests / "App.Tests.csproj").write_text('<Project><ItemGroup><PackageReference Include="xunit.v3" /></ItemGroup></Project>')
+    ok, detail = _test_stack(tmp_path)                                                      # central package management, no mocks
+    assert ok and "none (hand-written fakes)" in detail
+    (tmp_path / "Directory.Packages.props").write_text('<PackageVersion Include="Moq" Version="4.20.0" />')
+    assert "Moq" in _test_stack(tmp_path)[1]
+    (tests / "App.Tests.csproj").write_text('<Project><ItemGroup><PackageReference Include="NUnit" /></ItemGroup></Project>')
+    ok, detail = _test_stack(tmp_path)
+    assert not ok and "xunit missing in: App.Tests.csproj" == detail
+
+
+def test_prompts_do_not_mandate_a_mocking_library(cfg):
+    from autodeliver.agents import AgentRunner, packaged_prompts
+    text = (packaged_prompts() / "test_author.md").read_text() + (packaged_prompts() / "standards" / "testing.md").read_text()
+    assert "Use xUnit and NSubstitute" not in text and "Never add a package" in text

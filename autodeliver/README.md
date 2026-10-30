@@ -24,9 +24,19 @@ The `.claude/notes/<id>.md` file `azure-workitem-flow` resumes from is written t
 
 ## Install
 
+macOS and Linux, one command (own virtual environment in `~/.autodeliver`, `autodeliver` on your PATH, no sudo; re-run to upgrade):
+
+```bash
+./scripts/install.sh              # from this checkout
+./scripts/install.sh --github     # or straight from GitHub
+./scripts/install.sh --uninstall
+```
+
+Manually, or in a pipeline:
+
 ```bash
 # in a virtual environment
-pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.3.0"
+pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.3.1"
 autodeliver --version
 ```
 
@@ -67,6 +77,17 @@ The agents run through the Claude Agent SDK, which uses the Claude Code CLI. It 
 Subscription limits assume ordinary individual use. Anthropic's terms require API keys for products and services built on the Agent SDK, and do not allow routing other people's work through a Pro/Max login, so a pipeline that delivers your colleagues' tickets needs an API key (or the organisation's own plan). One run is 8 or more agent sessions, with Opus for planning and review; on Pro you will reach the session limit quickly, Max is more realistic.
 
 If both variables are set the CLI uses the API key. An undefined pipeline variable arrives as the literal `$(NAME)`; autodeliver removes it so it is never tried as a credential.
+
+## Test runners
+
+autodeliver supports both .NET test modes and picks one from `global.json`:
+
+| `global.json` | Mode | Command |
+|---|---|---|
+| no `test.runner` | VSTest | `dotnet test <sln> --logger trx --filter AC=AC-1` |
+| `"test": {"runner": "Microsoft.Testing.Platform"}` | Microsoft.Testing.Platform (xunit.v3) | `dotnet test --solution <sln> --filter-trait AC=AC-1` |
+
+Run `autodeliver doctor --probe-tests` once per repository: it builds, runs the tests and checks that the trait filter is accepted. The agents use the mocking library the repository already uses, and hand-written fakes when it has none.
 
 ## Configuration
 

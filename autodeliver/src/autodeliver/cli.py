@@ -24,6 +24,7 @@ import yaml
 
 from . import __version__, auth
 from .config import OVERLAY_PATH, ConfigError, load_config, warnings
+from .dotnet import MTP_ZERO_TESTS
 from .repo_info import detect
 
 PIPELINE_PATH = Path(".azuredevops") / "autodeliver.yml"
@@ -124,7 +125,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     has_token = _secret("SYSTEM_ACCESSTOKEN") or _secret("AZURE_DEVOPS_PAT")
     ok("Azure DevOps token", has_token or not args.ci, "SYSTEM_ACCESSTOKEN (pipeline) or AZURE_DEVOPS_PAT (local)")
     tests_ok, detail = _test_stack(repo)
-    ok("xUnit + NSubstitute in test projects", tests_ok, detail)
+    ok("xUnit test projects", tests_ok, detail)
+    if cfg and getattr(args, "probe_tests", False):
+        _probe_tests(repo, cfg, ok)
 
     width = max(len(c[0]) for c in checks)
     for name, passed, detail in checks:
@@ -135,15 +138,37 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def _test_stack(repo: Path) -> tuple[bool, str]:
+    """xUnit is required. The mocking library is only reported: the agents follow what the repository uses."""
     projects = [p for p in repo.rglob("*.csproj") if "test" in p.name.lower() and "bin" not in p.parts and "obj" not in p.parts]
     if not projects:
         return False, "no test projects found (name must contain 'test')"
-    missing = []
-    for p in projects:
-        text = p.read_text(encoding="utf-8", errors="replace").lower()
-        if "xunit" not in text or "nsubstitute" not in text:
-            missing.append(p.name)
-    return (not missing), (f"{len(projects)} test project(s)" if not missing else f"missing in: {', '.join(missing[:5])}")
+    shared = [repo / n for n in ("Directory.Build.props", "Directory.Packages.props")]
+    texts = {p: p.read_text(encoding="utf-8", errors="replace").lower() for p in [*projects, *[f for f in shared if f.is_file()]]}
+    missing = [p.name for p in projects if "xunit" not in texts[p]]
+    mocks = sorted({lib for t in texts.values() for lib in ("NSubstitute", "Moq", "FakeItEasy") if lib.lower() in t})
+    detail = f"{len(projects)} test project(s); mocking: {', '.join(mocks) or 'none (hand-written fakes)'}"
+    return (not missing), (detail if not missing else f"xunit missing in: {', '.join(missing[:5])}")
+
+
+def _probe_tests(repo: Path, cfg: dict, ok) -> None:
+    """Run the real build and test commands once, so the runner support is verified on this machine."""
+    import tempfile
+    from .dotnet import Dotnet
+    d = Dotnet(repo, cfg)
+    tmp = Path(tempfile.mkdtemp(prefix="autodeliver-probe-"))
+    ok("test runner", True, f"{d.runner} ({' '.join(d.test_args(tmp / 'x', 'AC=AC-1')[:6])} ...)")
+    b = d.build()
+    ok("probe: build", b.ok, f"{b.errors} error(s), {b.warnings} warning(s)" if b.ok else b.tail[-300:])
+    if not b.ok:
+        return
+    full = d.test(tmp / "full")
+    ok("probe: full test run", full.ok and full.executed > 0,
+       f"executed={full.executed} passed={full.passed} failed={full.failed} exit={full.code}" if full.executed else
+       f"no tests counted, exit={full.code}: {full.tail[-400:]}")
+    # A trait nobody uses: the runner must accept the option and report zero tests, not reject the command line.
+    none = d.test(tmp / "none", f"{cfg['tests']['ac_trait_name']}=AC-0")
+    accepted = none.executed == 0 and none.code in (0, MTP_ZERO_TESTS if d.runner == "mtp" else 0)
+    ok("probe: trait filter", accepted, f"exit={none.code}, executed={none.executed}" if accepted else none.tail[-400:])
 
 
 # --- tools -----------------------------------------------------------------------------------------
@@ -256,6 +281,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = with_repo(sub.add_parser("doctor", help="check prerequisites and configuration"))
     p.add_argument("--ci", action="store_true", help="also require pipeline secrets")
+    p.add_argument("--probe-tests", action="store_true",
+                   help="also build and run the tests once, to verify the test-runner commands on this machine")
     p.set_defaults(func=cmd_doctor)
 
     tools = sub.add_parser("tools", help="manage external scanners")

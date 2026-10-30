@@ -6,7 +6,7 @@
 | Layer | Test as | Doubles |
 |---|---|---|
 | Domain (entities, value objects, aggregate invariants) | Pure unit tests | None. Needing a mock means the rule is in the wrong place |
-| Application (services, handlers, orchestration) | Unit tests at the port boundary | Fake/stub the abstractions the layer owns (NSubstitute) |
+| Application (services, handlers, orchestration) | Unit tests at the port boundary | Fake/stub the abstractions the layer owns (the mocking library the repo already uses, else hand-written fakes) |
 | Infrastructure (EF Core, HTTP clients, messaging) | Integration tests | Real database/serialisation. Never mock `DbContext` or `HttpClient` |
 | Presentation (controllers, endpoints) | Usually nothing | A controller needing its own test holds logic that belongs in Application |
 
