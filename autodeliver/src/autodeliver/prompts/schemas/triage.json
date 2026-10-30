@@ -44,11 +44,32 @@
           },
           "text": {
             "type": "string"
+          },
+          "impact": {
+            "type": "string",
+            "enum": [
+              "negligible",
+              "minor",
+              "material"
+            ]
+          },
+          "impact_reason": {
+            "type": "string"
+          },
+          "default": {
+            "type": "string"
+          },
+          "reversible": {
+            "type": "boolean"
           }
         },
         "required": [
           "source",
-          "text"
+          "text",
+          "impact",
+          "impact_reason",
+          "default",
+          "reversible"
         ],
         "additionalProperties": false
       }
@@ -63,11 +84,32 @@
           },
           "why": {
             "type": "string"
+          },
+          "impact": {
+            "type": "string",
+            "enum": [
+              "negligible",
+              "minor",
+              "material"
+            ]
+          },
+          "impact_reason": {
+            "type": "string"
+          },
+          "default": {
+            "type": "string"
+          },
+          "reversible": {
+            "type": "boolean"
           }
         },
         "required": [
           "question",
-          "why"
+          "why",
+          "impact",
+          "impact_reason",
+          "default",
+          "reversible"
         ],
         "additionalProperties": false
       }

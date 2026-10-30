@@ -1,4 +1,6 @@
 """End-to-end state machine runs on a real temporary git repo, with fake agents and a fake dotnet."""
+import re
+import pytest
 import json
 import subprocess
 from pathlib import Path
@@ -199,7 +201,7 @@ def test_existing_classification_disagreement_escalates(tmp_path, cfg):
     p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, checker_ac1="additional")
     assert code == 2 and p.state.stage == "plan"
     assert agents.calls.count("planner") == cfg["loops"]["plan"]
-    assert "existing/additional" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+    assert "which criteria already hold" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
 
 
 def test_criteria_found_only_in_comments_escalate(tmp_path, cfg):
@@ -707,3 +709,86 @@ def test_mover_never_picks_closed_and_respects_the_process_spelling():
     assert pick_state(["To Do", "Doing", "Done"], ["Resolved", "Done"]) == "Done"
     assert pick_state(["New", "Active", "Closed"], ["closed", "Resolved"]) is None
     assert pick_state(["to do", "DOING"], ["Doing"]) == "DOING"
+
+
+# --- v0.8.0: weigh open points; proceed on negligible ones with a stated default ---------------------------
+def point(question="Which folder holds the status types?", impact="negligible", default="Core/Invoicing next to Invoice",
+          reversible=True, why="placement only"):
+    return {"question": question, "why": why, "impact": impact, "impact_reason": why, "default": default, "reversible": reversible}
+
+
+class Weighing(FakeAgents):
+    def __init__(self, repo, blockers, review="accept", checker_blockers=None):
+        super().__init__(repo)
+        self.blockers, self.review, self.checker_blockers = blockers, review, checker_blockers or []
+
+    def run(self, role, model_key, variables, policy, budget, attempt):
+        r = super().run(role, model_key, variables, policy, budget, attempt)
+        if role == "triage":
+            r.output["blockers"] = self.blockers
+        if role == "plan_checker":
+            ids = re.findall(r"- (A-\d+) \[", variables["description"])
+            r.output["assumption_review"] = [{"id": i, "verdict": self.review, "reason": "cosmetic"} for i in ids]
+            r.output["blockers"] = self.checker_blockers
+        return r
+
+
+def weigh_run(tmp_path, cfg, agents_factory, dry_run=False):
+    repo = make_repo(tmp_path, with_origin=not dry_run)
+    agents = agents_factory(repo)
+    ado = OfflineAzureDevOps(STORY)
+    p = Pipeline(cfg, repo, 4242, ado, agents, dry_run=dry_run, dotnet_factory=lambda: FakeDotnet(repo))
+    return p, p.run(), repo, ado, agents
+
+
+def test_a_negligible_open_point_with_a_default_is_assumed_and_shown_on_the_pr(tmp_path, cfg):
+    p, code, repo, ado, agents = weigh_run(tmp_path, cfg, lambda r: Weighing(r, [point()]))
+    assert code == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text() if code else ""
+    a = p.state.assumptions[0]
+    assert a["id"] == "A-1" and a["review"].startswith("accepted") and "Core/Invoicing" in a["default"]
+    assert "A-1" in agents.variables["developer"]["description"]                      # the developer implements the default
+    pr = [w[1] for w in ado.writes if w[0] == "pr"][0]
+    assert "Decisions taken without asking" in pr["description"] and "Core/Invoicing" in pr["description"]
+    assert "Decisions taken without asking" in (repo / ".work/autodeliver/4242/evidence.md").read_text()
+
+
+@pytest.mark.parametrize("bad, reason", [
+    (point(impact="material"), "impact material"),
+    (point(reversible=False), "not reversible"),
+    (point(default=""), "no default"),
+    (point(question="Which VAT exemption wording?"), "mentions VAT"),
+])
+def test_open_points_that_are_not_small_still_stop_the_run(tmp_path, cfg, bad, reason):
+    p, code, repo, ado, agents = weigh_run(tmp_path, cfg, lambda r: Weighing(r, [bad]), dry_run=True)
+    text = (repo / ".work/autodeliver/4242/escalation.md").read_text()
+    assert code == 2 and p.state.stage == "triage" and reason in text and "planner" not in agents.calls
+
+
+def test_too_many_small_points_are_one_big_gap(tmp_path, cfg):
+    p, code, repo, ado, agents = weigh_run(tmp_path, cfg, lambda r: Weighing(r, [point(f"q{i}?") for i in range(4)]), dry_run=True)
+    assert code == 2 and "exceed analysis.max_assumptions=3" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+
+
+def test_the_second_model_can_refuse_an_assumption(tmp_path, cfg):
+    p, code, repo, ado, agents = weigh_run(tmp_path, cfg, lambda r: Weighing(r, [point()], review="escalate"), dry_run=True)
+    assert code == 2 and p.state.stage == "plan"
+    assert "not accepted by the second model" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+
+
+def test_minor_points_need_the_ceiling_raised_and_weighing_can_be_switched_off(tmp_path, cfg):
+    p, code, *_ = weigh_run(tmp_path / "a", cfg, lambda r: Weighing(r, [point(impact="minor")]), dry_run=True)
+    assert code == 2
+    cfg["analysis"]["proceed_up_to"] = "minor"
+    p, code, *_ = weigh_run(tmp_path / "b", cfg, lambda r: Weighing(r, [point(impact="minor")]), dry_run=True)
+    assert code == 0 and p.state.assumptions[0]["impact"] == "minor"
+    cfg["analysis"]["proceed_up_to"] = "none"
+    p, code, *_ = weigh_run(tmp_path / "c", cfg, lambda r: Weighing(r, [point()]), dry_run=True)
+    assert code == 2
+
+
+def test_checker_blockers_pass_only_when_negligible(tmp_path, cfg):
+    cfg["analysis"]["proceed_up_to"] = "minor"
+    p, code, *_ = weigh_run(tmp_path / "a", cfg, lambda r: Weighing(r, [], checker_blockers=[point(impact="minor")]), dry_run=True)
+    assert code == 2 and p.state.stage == "plan"
+    p, code, *_ = weigh_run(tmp_path / "b", cfg, lambda r: Weighing(r, [], checker_blockers=[point()]), dry_run=True)
+    assert code == 0 and p.state.assumptions[0]["source"] == "plan check"

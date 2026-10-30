@@ -38,6 +38,8 @@ No variable set: the Claude Code login on this machine (the user's subscription;
 
 Exit codes: 0 draft PR or dry run done, 1 not eligible, 2 escalated to a human, 3 internal or config error. A dry run works on a local branch and then puts the repository back where it started; the branch is kept (autodeliver never deletes a branch; the next dry run takes a `-dryrun-N` name) and what the agents produced stays in `.work/autodeliver/<ID>/dry-run.patch` (plus `dry-run-files/` for files they left untracked).
 
+Open points: triage weighs each one (negligible / minor / material, default, reversible). Negligible points with a default are proceeded on and listed on the PR as "Decisions taken without asking"; the plan checker must accept each. Anything material, irreversible, without a default, or about legal / VAT / accounting / personal data / security still stops the run. Tune with `analysis.proceed_up_to` (none | negligible | minor) and `analysis.max_assumptions`.
+
 Board: a real run moves the item and its open child tasks to Doing when the plan is approved, children follow at the draft PR, and a run that stops puts the cards back. After the merge, `autodeliver complete --work-item <ID>` lists the moves to Done; add `--yes` to apply.
 
 Before a real run outside the pipeline, confirm with the user. It pushes a branch, opens a draft PR and comments on the ticket.

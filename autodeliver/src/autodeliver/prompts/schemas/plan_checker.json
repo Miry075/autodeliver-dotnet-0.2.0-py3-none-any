@@ -75,11 +75,60 @@
           },
           "why": {
             "type": "string"
+          },
+          "impact": {
+            "type": "string",
+            "enum": [
+              "negligible",
+              "minor",
+              "material"
+            ]
+          },
+          "impact_reason": {
+            "type": "string"
+          },
+          "default": {
+            "type": "string"
+          },
+          "reversible": {
+            "type": "boolean"
           }
         },
         "required": [
           "question",
-          "why"
+          "why",
+          "impact",
+          "impact_reason",
+          "default",
+          "reversible"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "assumption_review": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^A-[0-9]+$"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "escalate"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "reason"
         ],
         "additionalProperties": false
       }
@@ -89,7 +138,8 @@
     "ac_classification",
     "files",
     "concerns",
-    "blockers"
+    "blockers",
+    "assumption_review"
   ],
   "additionalProperties": false
 }

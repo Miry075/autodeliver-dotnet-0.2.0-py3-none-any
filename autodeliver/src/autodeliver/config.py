@@ -25,7 +25,7 @@ MANDATORY_DENY = [".autodeliver/**", ".azuredevops/**"]
 
 REQUIRED_SECTIONS = [
     "azure_devops", "spec", "eligibility", "branch", "commit", "scope", "dotnet", "tests", "mutation", "phi",
-    "sonar", "loops", "models", "budget", "plan_check", "on_start", "on_escalate", "on_success", "on_complete", "tools",
+    "sonar", "loops", "models", "budget", "analysis", "plan_check", "on_start", "on_escalate", "on_success", "on_complete", "tools",
 ]
 REQUIRED_LOOPS = ["plan", "tests", "dev", "review", "quality"]
 REQUIRED_MODELS = ["mapper", "triage", "planner", "plan_checker", "test_author", "developer", "reviewer", "pr_writer"]
@@ -121,6 +121,10 @@ def validate(cfg: dict[str, Any], *, require_remote: bool = True) -> None:
             raise ConfigError(f"{section}.{key} must not contain Closed: closing is the reviewer's or tester's call")
         if not names and (section == "on_complete" or cfg[section].get("transition")):
             raise ConfigError(f"{section}.{key} is empty")
+    if str(cfg["analysis"].get("proceed_up_to")) not in ("none", "negligible", "minor"):
+        raise ConfigError("analysis.proceed_up_to must be none, negligible or minor (material always goes to a human)")
+    if int(cfg["analysis"].get("max_assumptions", -1)) < 0:
+        raise ConfigError("analysis.max_assumptions must be 0 or more")
     if float(cfg["on_success"].get("max_hours", 0)) <= 0:
         raise ConfigError("on_success.max_hours must be positive")
     if float(cfg["budget"]["max_total_usd"]) <= 0:

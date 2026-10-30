@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .dotnet import BuildResult, MutationResult, TestResult
 from .git import NumStat
@@ -264,13 +264,36 @@ def classification_agreement(plan: dict, check: dict, declared: dict[str, str] |
     return GateResult("ac_classification", not details, f"{len(mine)} criteria classified{note}", details)
 
 
-def plan_agreement(planner: list[str], checker: list[str], threshold: float) -> GateResult:
+def _project(path: str) -> str:
+    """The project a file belongs to: the path up to the first folder holding a .csproj-like name, else the first two
+    segments (src/Lalana.Connect.Core/Invoicing/X.cs -> src/lalana.connect.core)."""
+    parts = path.split("/")
+    return "/".join(parts[:2]) if len(parts) > 2 else parts[0]
+
+
+def plan_agreement(planner: list[str], checker: list[str], threshold: float,
+                   exists: Callable[[str], bool] | None = None) -> GateResult:
+    """Do both models touch the same files? A file that does not exist yet counts as the same file when both create
+    it under the same name in the same project: the folder of a new file is a placement choice, not a disagreement
+    on what to build. Placement differences are reported so the reviewer can check the convention."""
     a = {norm(p).lower() for p in planner}
     b = {norm(p).lower() for p in checker}
-    union = a | b
-    overlap = len(a & b) / len(union) if union else 1.0
+    exists = exists or (lambda p: True)
+    new_b = {(_project(p), p.rsplit("/", 1)[-1]): p for p in b - a if not exists(p)}
+    moved: list[tuple[str, str]] = []
+    for p in sorted(a - b):
+        key = (_project(p), p.rsplit("/", 1)[-1])
+        if not exists(p) and key in new_b:
+            moved.append((p, new_b.pop(key)))
+    matched = len(a & b) + len(moved)
+    union = len(a | b) - len(moved)
+    overlap = matched / union if union else 1.0
     passed = overlap >= threshold
-    details = [] if passed else [f"only in plan: {sorted(a - b)}", f"only in independent check: {sorted(b - a)}"]
+    only_a = sorted((a - b) - {m[0] for m in moved})
+    only_b = sorted((b - a) - {m[1] for m in moved})
+    details = [f"same new file, different folder: plan {x} / check {y}" for x, y in moved]
+    if not passed:
+        details += [f"only in plan: {only_a}", f"only in independent check: {only_b}"]
     return GateResult("plan_agreement", passed, f"file overlap {overlap:.2f} (min {threshold})", details)
 
 
@@ -329,3 +352,48 @@ def summarise(results: list[GateResult]) -> str:
         lines.append(f"- [{'PASS' if r.passed else 'FAIL'}] {r.name}: {r.summary}")
         lines += [f"    - {d}" for d in r.details[:20]]
     return "\n".join(lines)
+
+
+# --- weighing open points (triage extras/blockers, checker blockers) --------------------------------------
+IMPACT = {"negligible": 0, "minor": 1, "material": 2}
+
+
+def weigh(points: list[dict[str, Any]], cfg: dict, *, ceiling: str | None = None) -> tuple[list[dict], list[dict]]:
+    """Split open points into (proceed, stop). A point is proceeded on only when every rule allows it: impact at
+    or below the configured ceiling, reversible, a concrete default, and no always-escalate topic. Too many small
+    points together are one big gap, so above max_assumptions everything stops. The model's own weight is never
+    enough on its own: the plan checker reviews every proceeded point again later."""
+    a = cfg["analysis"]
+    limit = ceiling or str(a["proceed_up_to"])
+    topics = [str(t) for t in a.get("always_escalate", [])]
+    proceed: list[dict] = []
+    stop: list[dict] = []
+    for p in points:
+        text = " ".join(str(p.get(k, "")) for k in ("question", "why", "text", "default", "impact_reason"))
+        why: list[str] = []
+        impact = str(p.get("impact", "material"))
+        if limit == "none":
+            why.append("weighing is switched off")
+        elif IMPACT.get(impact, 2) > IMPACT[limit]:
+            why.append(f"impact {impact}")
+        if not p.get("reversible"):
+            why.append("not reversible")
+        if not str(p.get("default", "")).strip():
+            why.append("no default")
+        hit = [t for t in topics if re.search(rf"(?<![A-Za-z]){re.escape(t)}(?![A-Za-z])", text, re.IGNORECASE)]
+        if hit:
+            why.append(f"mentions {', '.join(hit)}")
+        (stop if why else proceed).append({**p, "stop_reasons": why})
+    if len(proceed) > int(a["max_assumptions"]):
+        stop += [{**p, "stop_reasons": [f"{len(proceed)} open points exceed analysis.max_assumptions={a['max_assumptions']}"]}
+                 for p in proceed]
+        proceed = []
+    return proceed, stop
+
+
+def describe_point(p: dict[str, Any]) -> str:
+    base = p.get("question") or p.get("text", "")
+    weight = f"[{p.get('impact', '?')}{', reversible' if p.get('reversible') else ''}]"
+    extra = f" Default: {p['default']}." if str(p.get("default", "")).strip() else ""
+    stop = f" Stopped: {'; '.join(p['stop_reasons'])}." if p.get("stop_reasons") else ""
+    return f"{base} {weight}{extra}{stop}".strip()

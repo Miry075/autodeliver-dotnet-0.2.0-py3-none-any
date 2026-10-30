@@ -792,3 +792,16 @@ def test_a_stage_with_structured_output_returns_it(tmp_path, cfg, monkeypatch):
                              "acceptance_criteria": [], "criteria_source": "x", "security_criteria": "-", "comments": "-",
                              "linked": "-", "conventions": ["-"]}, ToolPolicy(tmp_path), 1.0, 1)
     assert out.output == {"locations": []} and out.turns == 2
+
+
+def test_plan_agreement_matches_the_same_new_file_placed_in_another_folder():
+    plan = ["src/Lalana.Connect.Core/Tracking/InvoiceStatus.cs", "src/Lalana.Connect.Core/Tracking/StatusTracker.cs",
+            "tests/Lalana.Connect.Tests/StatusTests.cs"]
+    check = ["src/Lalana.Connect.Core/Invoicing/InvoiceStatus.cs", "src/Lalana.Connect.Core/Invoicing/StatusTracker.cs",
+             "tests/Lalana.Connect.Tests/StatusTests.cs"]
+    r = gates.plan_agreement(plan, check, 0.5, exists=lambda p: False)
+    assert r.passed and r.summary.startswith("file overlap 1.00")
+    assert any("different folder" in d for d in r.details)
+    # an existing file is a real disagreement, and another project is not the same file
+    assert not gates.plan_agreement(["src/A/X.cs"], ["src/A/Sub/X.cs"], 0.5, exists=lambda p: True).passed
+    assert not gates.plan_agreement(["src/A/X.cs"], ["src/B/X.cs"], 0.5, exists=lambda p: False).passed

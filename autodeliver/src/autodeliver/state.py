@@ -46,6 +46,7 @@ class RunState:
     frozen_test_files: list[str] = field(default_factory=list)
     frozen_hashes: dict[str, str] = field(default_factory=dict)      # tests stay in the working tree until the one commit
     effort: dict[str, Any] | None = None                             # reviewer's human-equivalent estimate
+    assumptions: list[dict[str, Any]] = field(default_factory=list)      # open points weighed as small: A-n, proceeded on
     status_changes: list[dict[str, Any]] = field(default_factory=list)   # board moves of the item and its children
     resolution: dict[str, Any] | None = None                         # what step 8 wrote
     gate_results: list[dict[str, Any]] = field(default_factory=list)

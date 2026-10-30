@@ -155,6 +155,10 @@ class Pipeline:
             if deferred:
                 description += "\n\nCriteria deferred to other work items (not part of this change):\n" + "\n".join(f"- {d}" for d in deferred)
             source = f"the parent {inh['type']} #{inh['id']} ({inh['criteria_source']})"
+        if self.state.assumptions:
+            description += ("\n\n--- Decisions taken in place of a human answer (weighed as small; implement the default) ---\n"
+                            + "\n".join(f"- {a['id']} [{a['impact']}]: {a['question']} -> default: {a['default']}"
+                                         for a in self.state.assumptions))
         return {"work_item_id": str(self.state.work_item_id), "work_item_type": wi.type, "title": wi.title,
                 "description": description,
                 "acceptance_criteria": [{k: v for k, v in a.items() if k != "declared"} for a in self.state.acs],
@@ -381,18 +385,57 @@ class Pipeline:
         for a in out.get("acs", []):
             if not a.get("testable"):
                 questions.append(f"{a['id']} is not testable as written: {a.get('issue', '')}")
-        questions += [f"criterion found in the {x['source']} but not in the acceptance criteria: {x['text']} "
-                      f"(add it to the criteria, or state it is not required)" for x in out.get("extra_criteria", [])]
-        questions += [f"{b['question']} ({b.get('why', '')})" for b in out.get("blockers", [])]
+        points = [{**x, "kind": "extra criterion", "question": f"criterion found in the {x['source']} but not in the "
+                   f"acceptance criteria: {x['text']} (add it to the criteria, or state it is not required)"}
+                  for x in out.get("extra_criteria", [])]
+        points += [{**b, "kind": "blocker", "question": f"{b['question']} ({b.get('why', '')})"} for b in out.get("blockers", [])]
+        proceed, stop = gates.weigh(points, self.cfg)
+        questions += [gates.describe_point(p) for p in stop]
         questions += [f"touches restricted area {r['area']}: {r['reason']}" for r in out.get("touches_restricted", [])]
         if out.get("estimated_tasks", 0) > el["max_estimated_tasks"] or len(out.get("estimated_files", [])) > el["max_estimated_files"]:
             questions.append(f"too large for autonomous delivery: ~{out.get('estimated_tasks')} tasks, "
                              f"~{len(out.get('estimated_files', []))} files; split the work item")
         if questions:
+            if proceed:
+                questions += [f"(would have proceeded on) {gates.describe_point(p)}" for p in proceed]
             raise Escalation("triage", "the work item needs clarification before it can be delivered unattended", questions)
+        self._adopt_assumptions(proceed, "triage")
         restated = {a["id"]: a.get("restated", "") for a in out["acs"]}
         for ac in self.state.acs:
             ac["restated"] = restated.get(ac["id"], "")
+
+    # ===== open points weighed as small: proceed on a stated default ===================================
+    def _adopt_assumptions(self, points: list[dict], source: str, reviewed: bool | None = None) -> None:
+        known = {a["question"] for a in self.state.assumptions}
+        for p in points:
+            if p.get("question", "") in known:          # a later planning loop raising the same point again
+                continue
+            n = len(self.state.assumptions) + 1
+            self.state.assumptions.append({
+                "id": f"A-{n}", "source": source, "question": p.get("question", ""), "default": p.get("default", ""),
+                "impact": p.get("impact", ""), "impact_reason": p.get("impact_reason", ""),
+                "review": None if reviewed is None else ("not reviewed (raised by the checker itself)" if not reviewed else "")})
+            self.state.log(source, f"proceeding on A-{n} ({p.get('impact')}): {p.get('default', '')[:200]}")
+        self.save()
+
+    def _review_assumptions(self, check: dict) -> None:
+        """Second opinion: the plan checker (another model) must accept every default triage chose."""
+        pending = [a for a in self.state.assumptions if a["review"] is None]
+        if not pending:
+            return
+        verdicts = {v["id"]: v for v in check.get("assumption_review", [])}
+        refused = []
+        for a in pending:
+            v = verdicts.get(a["id"])
+            if v is None:
+                refused.append(f"{a['id']}: the independent check did not review it ({a['question']})")
+            elif v["verdict"] != "accept":
+                refused.append(f"{a['id']}: the independent check says a human must decide: {v.get('reason', '')} ({a['question']})")
+            else:
+                a["review"] = f"accepted by the independent check: {v.get('reason', '')}"
+        if refused:
+            raise Escalation("plan", "an open point weighed as small was not accepted by the second model", refused)
+        self.save()
 
     def plan(self) -> None:
         self._enter("plan")
@@ -418,12 +461,20 @@ class Pipeline:
                 self._record(last, f"plan-{attempt}")
                 continue
             check = self._agent("plan_checker", "plan_checker", self._work_item_vars(), self._readonly(), attempt)
+            self._review_assumptions(check)
             if check.get("blockers"):
-                raise Escalation("plan", "independent check found blocking ambiguity",
-                                 [f"{b['question']} ({b.get('why', '')})" for b in check["blockers"]])
+                # The checker is the second opinion; nobody reviews its own points again, so only negligible ones pass.
+                points = [{**b, "question": f"{b['question']} ({b.get('why', '')})"} for b in check["blockers"]]
+                room = max(0, int(self.cfg["analysis"]["max_assumptions"]) - len(self.state.assumptions))
+                proceed, stop = gates.weigh(points, {**self.cfg, "analysis": {**self.cfg["analysis"], "max_assumptions": room}},
+                                            ceiling="negligible" if self.cfg["analysis"]["proceed_up_to"] != "none" else "none")
+                if stop:
+                    raise Escalation("plan", "independent check found blocking ambiguity", [gates.describe_point(p) for p in stop])
+                self._adopt_assumptions(proceed, "plan check", reviewed=False)
             checker_files = [f["path"] for f in check.get("files", []) if not match_any(f["path"], s["test_path_globs"])]
             agreement = gates.plan_agreement(gates.plan_files(plan, tests_only=False, cfg=self.cfg), checker_files,
-                                             float(self.cfg["plan_check"]["min_file_overlap"]))
+                                             float(self.cfg["plan_check"]["min_file_overlap"]),
+                                             lambda p: (self.repo / p).is_file())
             classification = gates.classification_agreement(plan, check, self._declared())
             last = [shape, classification, agreement]
             self._record(last, f"plan-{attempt}")
@@ -432,9 +483,15 @@ class Pipeline:
                 self._write_notes()
                 return
             feedback = gates.summarise([r for r in (classification, agreement) if not r.passed]) + \
+                ("\nPut new files in the existing folder whose types they belong with, as the code map shows; "
+                 "a new folder needs a reason." if not agreement.passed else "") + \
                 "\nIndependent reviewer concerns:\n" + "\n".join(f"- {c}" for c in check.get("concerns", []))
-        raise Escalation("plan", "analysis did not pass its gates within the loop limit "
-                                 "(an existing/additional disagreement means a human must confirm the baseline)",
+        failed = [r.name for r in last if not r.passed]
+        why = {"ac_classification": "the two models disagree on which criteria already hold: a human must confirm the baseline",
+               "plan_agreement": "the two models would change different files: a human must say which design is meant",
+               "plan_shape": "the plan does not cover every criterion with a task and a test"}
+        raise Escalation("plan", "analysis did not pass its gates within the loop limit: "
+                         + "; ".join(why.get(n, n) for n in failed),
                          [gates.summarise(last)])
 
     # ===== board: the item and its child tasks move together ============================================
@@ -791,7 +848,11 @@ class Pipeline:
         if self._has_phi(evidence):
             self.state.log("publish", "evidence pack not posted to the PR: the PHI scanner flagged it")
             evidence = "Evidence pack withheld from the PR: the PHI scanner flagged it. It is in the pipeline run record."
+        decided = "".join(f"\n- **{a['id']}** {a['question']} -> **{a['default']}**" for a in self.state.assumptions)
+        if decided and self._has_phi(decided):
+            decided = "\n- (withheld: the PHI scanner flagged the text; see the evidence pack in the run record)"
         description = (f"Implements AB#{wid}.\n\n" + summary + "\n\n" +
+                       (f"**Decisions taken without asking (verify):**{decided}\n\n" if decided else "") +
                        report.gate_table(self.state.gate_results) +
                        "\n\nFull evidence pack in the first PR thread. Generated by autodeliver; human approval required.")
         self._write("pr-description.md", description)

@@ -104,6 +104,11 @@ def evidence_pack(state: RunState) -> str:
     needed = list(review.get("still_needed", [])) + [f"follow-up: {f}" for f in plan.get("followups", [])]
     if needed:
         lines += ["", "### 10. Still needed"] + [f"- {n}" for n in needed]
+    if state.assumptions:
+        lines += ["", "### Decisions taken without asking (weighed as small; verify and change if wrong)"] + [
+            f"- **{a['id']}** [{a['impact']}] {a['question']}\n  - default implemented: {a['default']}\n"
+            f"  - why it was small: {a['impact_reason']}\n  - second opinion: {a.get('review') or 'n/a'}"
+            for a in state.assumptions]
     if plan.get("assumptions"):
         lines += ["", "### Assumptions made by the agents (verify these)"] + [f"- {a}" for a in plan["assumptions"]]
     res = state.resolution or {}
@@ -150,6 +155,9 @@ def success_html(state: RunState) -> str:
                      f"{written['Microsoft.VSTS.Scheduling.CompletedWork']}h. Correct it if it is off.<br>")
     if "System.State" in written:
         lines.append(f"State: {e(written['System.State'])} (dev-done, not verified). Closing is the reviewer's or tester's call.<br>")
+    if state.assumptions:
+        lines.append("Decisions taken without asking (check them in the PR): "
+                     + "; ".join(f"{e(a['id'])} {e(a['default'][:160])}" for a in state.assumptions) + "<br>")
     for note in res.get("notes", []):
         lines.append(f"Note: {e(note)}<br>")
     return "".join(lines)

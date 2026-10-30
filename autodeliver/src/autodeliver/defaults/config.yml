@@ -171,6 +171,13 @@ budget:
     reviewer: 50
     pr_writer: 10
 
+analysis:                              # weighing open points instead of stopping on every one
+  proceed_up_to: negligible            # none | negligible | minor: the largest impact the run may assume a default for
+  max_assumptions: 3                   # more open points than this means the ticket is under-specified: stop
+  always_escalate:                     # an open point mentioning any of these always goes to a human
+    [legal, law, VAT, VATEX, tax, PCMN, accounting, retention, GDPR, personal data, privacy, security,
+     authentication, authorization, consent, migration, contract, price, pricing, payment]
+
 plan_check:
   min_file_overlap: 0.5
 

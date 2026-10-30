@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0
+### Weigh open points instead of stopping on every one
+- Triage now weighs each open point (blocker or criterion found outside the criteria) with an impact (`negligible` / `minor` / `material`), a reason, a concrete default and whether it is reversible. The run proceeds on a point only when all of these hold: impact at or below `analysis.proceed_up_to` (default `negligible`), reversible, a default exists, and it mentions none of `analysis.always_escalate` (legal, VAT, tax, PCMN, accounting, retention, GDPR, personal data, security, authentication, migration, pricing, payment...). More than `analysis.max_assumptions` (default 3) small points together still stop the run: that is an under-specified ticket.
+- A second model checks every default: the plan checker must `accept` each assumption (A-1, A-2...) or the run escalates. Blockers raised by the checker itself pass only when negligible.
+- Agents implement the default exactly and name the assumption id where it shows. The draft PR description, the evidence pack and the ticket comment list every decision taken without asking, so the reviewer can change it.
+- Untestable criteria, restricted areas, oversized tickets and planner `BLOCKER:` assumptions still always escalate. `analysis.proceed_up_to: none` restores the previous behaviour.
+
+## 0.7.1
+- Fix: the plan-agreement gate escalated when the planner and the independent checker proposed the same new files in different folders (AB#185: `Core/Tracking/InvoiceStatus.cs` vs `Core/Invoicing/InvoiceStatus.cs` scored 0.00 overlap). A file that does not exist yet now matches when both create it under the same name in the same project; the folder difference is reported in the gate details for the reviewer. Existing files still need the exact path.
+- On a file disagreement the planner is told to put new files in the existing folder their types belong with.
+- The plan escalation now names the gate that failed instead of always blaming an existing/additional disagreement.
+
 ## 0.7.0
 - **The board follows the work.** When the plan is approved (real runs), the work item and its still-open child tasks move from To Do to the process's in-progress state (Doing / Active / In Progress). After the draft PR exists, open children follow the item to the dev-done state their type has. If the run stops later, every card it moved goes back to its previous state. A dry run only lists what it would move (`dry run: would move ...` in the run log). Finished children (Done, Resolved...) are never touched, Closed is never written, and a state the process rejects is reported in the evidence pack ("### Board") instead of stopping the delivery. Config: `on_start`, `on_success.cascade_children`.
 - New command `autodeliver complete --work-item ID [--yes] [--force]`: after the merge, moves the item and its child tasks to Done (Resolved on Agile). Without `--yes` it only lists the moves; it refuses an item that lacks the `autodeliver-pr` tag unless `--force`. Config: `on_complete`.
