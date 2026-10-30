@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+- Microsoft.Testing.Platform: dropped `--nologo` from the test command. The new runner rejects it with exit code 5 ("invalid command line"), which `doctor --probe-tests` caught on a real xunit.v3 solution. Every other option was confirmed accepted there: `--solution`, `-c`, `--no-build`, `--results-directory`, `--filter-trait NAME=VALUE` (a filter that matches nothing exits 8).
+- `doctor --probe-tests` now prints the command and the start of the output when a probe fails.
+
 ## 0.3.1
 
 ### Microsoft.Testing.Platform (xunit.v3, `"test": {"runner": ...}` in global.json)

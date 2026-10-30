@@ -488,7 +488,9 @@ def test_dotnet_test_command_per_runner(tmp_path, cfg):
     args = mtp.test_args(tmp_path / "r", "AC=AC-1")
     assert args[:4] == ["dotnet", "test", "--solution", "App.slnx"] and "--no-build" in args
     assert args[-2:] == ["--filter-trait", "AC=AC-1"]
-    assert "--logger" not in args and "--filter" not in args and "-v" not in args           # all rejected by the new runner
+    # all rejected by the new runner (exit code 5); --nologo was confirmed rejected on a real xunit.v3 solution
+    assert not {"--logger", "--filter", "-v", "--nologo"} & set(args)
+    assert "--nologo" in vs.test_args(tmp_path / "r")                                       # VSTest mode keeps it
 
 
 def test_dotnet_test_reads_mtp_console_summary(tmp_path, cfg, monkeypatch):
@@ -530,3 +532,11 @@ def test_prompts_do_not_mandate_a_mocking_library(cfg):
     from autodeliver.agents import AgentRunner, packaged_prompts
     text = (packaged_prompts() / "test_author.md").read_text() + (packaged_prompts() / "standards" / "testing.md").read_text()
     assert "Use xUnit and NSubstitute" not in text and "Never add a package" in text
+
+
+def test_probe_output_shows_the_start_of_a_long_failure():
+    from autodeliver.cli import _head_tail
+    out = "error: Unknown option '--x'\n" + "line\n" * 400 + "Exit code: 5"
+    shown = _head_tail(out)
+    assert shown.startswith("error: Unknown option") and shown.endswith("Exit code: 5") and "[...]" in shown
+    assert _head_tail("short") == "short"

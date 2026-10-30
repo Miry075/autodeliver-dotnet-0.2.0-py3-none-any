@@ -1,6 +1,6 @@
 {
   "name": "autodeliver-dotnet",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Install, run and troubleshoot autodeliver: unattended Azure DevOps work item to gated draft PR for .NET repositories.",
   "author": {
     "name": "Corilus"

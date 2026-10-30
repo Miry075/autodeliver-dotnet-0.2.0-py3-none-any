@@ -150,6 +150,12 @@ def _test_stack(repo: Path) -> tuple[bool, str]:
     return (not missing), (detail if not missing else f"xunit missing in: {', '.join(missing[:5])}")
 
 
+def _head_tail(text: str, head: int = 700, tail: int = 500) -> str:
+    """The cause of a rejected command line is at the start of the output, test failures near the end."""
+    text = text.strip()
+    return text if len(text) <= head + tail else f"{text[:head]}\n      [...]\n{text[-tail:]}"
+
+
 def _probe_tests(repo: Path, cfg: dict, ok) -> None:
     """Run the real build and test commands once, so the runner support is verified on this machine."""
     import tempfile
@@ -162,13 +168,15 @@ def _probe_tests(repo: Path, cfg: dict, ok) -> None:
     if not b.ok:
         return
     full = d.test(tmp / "full")
+    cmd = " ".join(d.test_args(tmp / "full"))
     ok("probe: full test run", full.ok and full.executed > 0,
-       f"executed={full.executed} passed={full.passed} failed={full.failed} exit={full.code}" if full.executed else
-       f"no tests counted, exit={full.code}: {full.tail[-400:]}")
+       f"executed={full.executed} passed={full.passed} failed={full.failed} exit={full.code}" if full.ok else
+       f"exit={full.code}, executed={full.executed}, failed={full.failed}\n      command: {cmd}\n"
+       f"{_head_tail(full.tail)}")
     # A trait nobody uses: the runner must accept the option and report zero tests, not reject the command line.
     none = d.test(tmp / "none", f"{cfg['tests']['ac_trait_name']}=AC-0")
     accepted = none.executed == 0 and none.code in (0, MTP_ZERO_TESTS if d.runner == "mtp" else 0)
-    ok("probe: trait filter", accepted, f"exit={none.code}, executed={none.executed}" if accepted else none.tail[-400:])
+    ok("probe: trait filter", accepted, f"exit={none.code}, executed={none.executed}" if accepted else _head_tail(none.tail))
 
 
 # --- tools -----------------------------------------------------------------------------------------

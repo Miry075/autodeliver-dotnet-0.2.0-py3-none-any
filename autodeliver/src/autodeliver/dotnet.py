@@ -163,8 +163,9 @@ class Dotnet:
     def test_args(self, results_dir: Path, test_filter: str | None = None) -> list[str]:
         """`test_filter` is a trait filter written NAME=VALUE (e.g. AC=AC-1) in both runner modes."""
         if self.runner == "mtp":
-            # Microsoft.Testing.Platform: no --logger/--filter/-v; the solution goes behind --solution.
-            args = ["dotnet", "test", "--solution", self.solution, "-c", self.configuration, "--no-build", "--nologo",
+            # Microsoft.Testing.Platform: no --logger/--filter/-v/--nologo (unknown options end with exit code 5,
+            # "invalid command line"); the solution goes behind --solution. DOTNET_NOLOGO=1 is set in the env.
+            args = ["dotnet", "test", "--solution", self.solution, "-c", self.configuration, "--no-build",
                     "--results-directory", str(results_dir)]
             if test_filter:
                 args += [self.cfg["dotnet"].get("mtp_filter_option", "--filter-trait"), test_filter]
