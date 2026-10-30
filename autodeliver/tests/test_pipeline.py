@@ -163,11 +163,11 @@ class FakeAgents:
 
 
 def run_pipeline(tmp_path: Path, cfg, behaviour="good", *, dry_run=True, with_origin=False, checker_ac1="existing", story=None,
-                 files=None):
+                 files=None, keep_branch=True):
     repo = make_repo(tmp_path, with_origin, files)
     ado = OfflineAzureDevOps(story or STORY, cfg["azure_devops"].get("criteria_section", ""))    # as the CLI does
     agents = FakeAgents(repo, behaviour, checker_ac1)
-    p = Pipeline(cfg, repo, 4242, ado, agents, dry_run=dry_run, dotnet_factory=lambda: FakeDotnet(repo))
+    p = Pipeline(cfg, repo, 4242, ado, agents, dry_run=dry_run, dotnet_factory=lambda: FakeDotnet(repo), keep_branch=keep_branch)
     return p, p.run(), repo, ado, agents
 
 
@@ -329,7 +329,7 @@ def test_pipeline_runs_in_a_linked_git_worktree(tmp_path, cfg):
     assert (wt / ".git").is_file()
     ado = OfflineAzureDevOps(STORY)
     agents = FakeAgents(wt)
-    p = Pipeline(cfg, wt, 4242, ado, agents, dry_run=True, dotnet_factory=lambda: FakeDotnet(wt))
+    p = Pipeline(cfg, wt, 4242, ado, agents, dry_run=True, dotnet_factory=lambda: FakeDotnet(wt), keep_branch=True)
     assert p.run() == 0, (wt / ".work/autodeliver/4242/escalation.md").read_text()
     assert git(wt, "log", "--format=%s", "-1").startswith("feat: refuse edits on closed episodes (AB#4242)")
     assert (main / "src" / "Care" / "Episode.cs").read_text() == "// unfinished local edit\n"    # untouched
@@ -574,3 +574,136 @@ def test_inheritance_walks_up_but_not_past_the_depth_limit(tmp_path, cfg):
     sub.mkdir()
     p, code, repo, ado, agents = run_pipeline(sub, c, story=story)
     assert code == 2 and p.state.inherited is None
+
+
+# --- v0.6.2: a dry run leaves nothing behind in the checkout ------------------------------------------------
+def test_dry_run_returns_the_checkout_to_where_it_started_and_keeps_the_result_as_a_patch(tmp_path, cfg):
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, keep_branch=False)
+    assert code == 0
+    assert git(repo, "branch", "--list", "feature/*").strip() != "" and git(repo, "branch", "--show-current").strip() == "main"
+    assert git(repo, "status", "--porcelain") == "" and not (repo / "tests/Care.Tests/EpisodeAcceptanceTests.cs").exists()
+    assert "IMPLEMENTED" not in (repo / "src/Care/Episode.cs").read_text()
+    patch = (repo / ".work/autodeliver/4242/dry-run.patch").read_text()
+    assert "IMPLEMENTED" in patch and "EpisodeAcceptanceTests.cs" in patch                  # code and tests, as committed
+    assert any("branch feature/4242" in e["message"] and "kept" in e["message"] for e in p.state.events)
+
+
+def test_a_second_dry_run_on_the_same_checkout_works(tmp_path, cfg):
+    repo = make_repo(tmp_path)
+    for _ in range(2):
+        p = Pipeline(cfg, repo, 4242, OfflineAzureDevOps(STORY), FakeAgents(repo), dry_run=True, dotnet_factory=lambda: FakeDotnet(repo))
+        assert p.run() == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text()
+    names = git(repo, "branch", "--list", "feature/*").split()
+    assert len(names) == 2 and any(n.endswith("-dryrun-2") for n in names)     # the first branch is untouched
+
+
+def test_dry_run_cleanup_after_an_escalation_keeps_unfinished_files_and_restores_a_detached_checkout(tmp_path, cfg):
+    repo = make_repo(tmp_path)
+    start = git(repo, "rev-parse", "HEAD").strip()
+    git(repo, "checkout", "-q", "--detach")
+    agents = FakeAgents(repo, "bad")
+    p = Pipeline(cfg, repo, 4242, OfflineAzureDevOps(STORY), agents, dry_run=True, dotnet_factory=lambda: FakeDotnet(repo))
+    assert p.run() == 2
+    assert git(repo, "rev-parse", "HEAD").strip() == start and git(repo, "branch", "--show-current").strip() == ""
+    assert git(repo, "branch", "--list", "feature/*").strip() != "" and git(repo, "status", "--porcelain") == ""
+    assert "EpisodeAcceptanceTests.cs" in (repo / ".work/autodeliver/4242/dry-run.patch").read_text()    # staged work is in the patch
+
+
+def test_keep_branch_and_real_runs_are_left_alone(tmp_path, cfg):
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, keep_branch=True)
+    assert code == 0 and git(repo, "branch", "--list", "feature/*").strip() != "" and not (repo / ".work/autodeliver/4242/dry-run.patch").exists()
+    sub = tmp_path / "live"
+    sub.mkdir()
+    p, code, repo, ado, agents = run_pipeline(sub, cfg, dry_run=False, with_origin=True, keep_branch=False)
+    assert code == 0 and git(repo, "branch", "--list", "feature/*").strip() != ""
+
+
+def test_files_the_agents_left_untracked_are_copied_before_cleanup(tmp_path, cfg):
+    repo = make_repo(tmp_path)
+
+    class Untracked(FakeAgents):
+        def run(self, role, *a, **k):
+            r = super().run(role, *a, **k)
+            if role == "developer":
+                (repo / "src/Care/NewHelper.cs").write_text("// agent-created, never staged\n")
+            return r
+    p = Pipeline(cfg, repo, 4242, OfflineAzureDevOps(STORY), Untracked(repo), dry_run=True, dotnet_factory=lambda: FakeDotnet(repo))
+    p.run()
+    assert not (repo / "src/Care/NewHelper.cs").exists() and git(repo, "status", "--porcelain") == ""
+
+
+def test_autodeliver_never_deletes_a_branch():
+    import re
+    root = Path(__file__).resolve().parents[1] / "src" / "autodeliver"
+    for f in root.rglob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        assert not re.search(r'"branch"[^\n]*"-[dD]"|"--delete"|delete_branch|push[^\n]*--delete|:refs/heads', text), f
+
+
+# --- v0.7.0: the board follows the work (item and child tasks) ---------------------------------------------
+def board_story(**over):
+    story = {**STORY, "type": "Issue", "state": "To Do", "type_states": ["To Do", "Doing", "Done"],
+             "linked": [{"id": "501", "relation": "child", "type": "Task", "title": "a", "state": "To Do"},
+                        {"id": "502", "relation": "child", "type": "Task", "title": "b", "state": "Done"},
+                        {"id": "503", "relation": "parent", "type": "Epic", "title": "e", "state": "To Do"}]}
+    return {**story, **over}
+
+
+def board_cfg(cfg):
+    cfg["eligibility"]["work_item_types"] = ["Issue", "Task"]
+    cfg["eligibility"]["allowed_states"] = ["To Do", "Doing"]
+    cfg["on_success"]["dev_done_states"] = ["Doing"]
+    return cfg
+
+
+def test_a_real_run_starts_the_item_and_its_open_children_and_leaves_finished_ones(tmp_path, cfg):
+    p, code, repo, ado, agents = run_pipeline(tmp_path, board_cfg(cfg), dry_run=False, with_origin=True, story=board_story())
+    assert code == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text() if code else ""
+    moves = [c for c in p.state.status_changes if c["phase"] == "start"]
+    assert [(c["id"], c["from"], c["to"]) for c in moves] == [(4242, "To Do", "Doing"), (501, "To Do", "Doing")]
+    assert [w[1] for w in ado.writes if w[0] == "state"] == ["Doing", "Doing"]          # 502 (Done) and the parent untouched
+    assert "### Board" in (repo / ".work/autodeliver/4242/evidence.md").read_text()
+
+
+def test_a_dry_run_reports_the_board_moves_but_writes_nothing(tmp_path, cfg):
+    p, code, repo, ado, agents = run_pipeline(tmp_path, board_cfg(cfg), story=board_story())
+    assert code == 0 and [w for w in ado.writes if w[0] == "state"] == []
+    assert any("dry run: would move" in e["message"] and "AB#501" in e["message"] for e in p.state.events)
+
+
+def test_children_follow_the_item_to_the_dev_done_state_after_the_pr(tmp_path, cfg):
+    c = board_cfg(cfg)
+    c["on_start"]["transition"] = False
+    c["on_success"]["dev_done_states"] = ["Doing"]
+    p, code, repo, ado, agents = run_pipeline(tmp_path, c, dry_run=False, with_origin=True, story=board_story())
+    assert code == 0
+    assert [(x["id"], x["to"], x["phase"]) for x in p.state.status_changes] == [(501, "Doing", "success")]
+    assert [w[0] for w in ado.writes].index("pr") < [w[0] for w in ado.writes].index("state")     # PR first
+
+
+def test_a_run_that_escalates_after_starting_puts_the_board_back(tmp_path, cfg):
+    p, code, repo, ado, agents = run_pipeline(tmp_path, board_cfg(cfg), "bad", dry_run=False, with_origin=True, story=board_story())
+    assert code == 2
+    states = [w[1] for w in ado.writes if w[0] == "state"]
+    assert states == ["Doing", "Doing", "To Do", "To Do"]                                 # moved, then restored
+    assert all(c.get("reverted") for c in p.state.status_changes if c["phase"] == "start")
+
+
+def test_a_rejected_transition_is_reported_and_does_not_stop_the_run(tmp_path, cfg):
+    class Strict(OfflineAzureDevOps):
+        def set_state(self, wid, state):
+            if wid == 501:
+                raise RuntimeError("TF401320: rule error")
+            super().set_state(wid, state)
+    repo = make_repo(tmp_path, True)
+    p = Pipeline(board_cfg(cfg), repo, 4242, Strict(board_story()), FakeAgents(repo), dry_run=False,
+                 dotnet_factory=lambda: FakeDotnet(repo))
+    assert p.run() == 0
+    assert any(c["id"] == 501 and c["done"] is False for c in p.state.status_changes)
+
+
+def test_mover_never_picks_closed_and_respects_the_process_spelling():
+    from autodeliver.workflow import pick_state
+    assert pick_state(["To Do", "Doing", "Done"], ["Resolved", "Done"]) == "Done"
+    assert pick_state(["New", "Active", "Closed"], ["closed", "Resolved"]) is None
+    assert pick_state(["to do", "DOING"], ["Doing"]) == "DOING"

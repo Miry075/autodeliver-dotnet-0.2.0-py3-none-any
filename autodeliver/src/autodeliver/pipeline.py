@@ -21,7 +21,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Callable
 
-from . import gates, report, spec as specmod
+from . import gates, report, spec as specmod, workflow
 from .ado import COMPLETED, REMAINING, extract_criteria
 from .agents import BASH_DOTNET, AgentError, AgentRunner, ToolPolicy
 from .dotnet import Dotnet
@@ -60,7 +60,8 @@ def quarter_hours(value: float) -> float:
 class Pipeline:
     def __init__(self, cfg: dict, repo: Path, work_item_id: int, ado: Any, agents: AgentRunner, *,
                  dry_run: bool, git: Git | None = None, dotnet_factory: Callable[[], Dotnet] | None = None,
-                 sonar_fn: Callable[..., Any] | None = None):
+                 sonar_fn: Callable[..., Any] | None = None, keep_branch: bool = False):
+        self.keep_branch = keep_branch
         self.cfg = cfg
         self.repo = Path(repo)
         self.ado = ado
@@ -180,6 +181,7 @@ class Pipeline:
             self.code_map()
             self.triage()
             self.plan()
+            self.start_work()
             self.acceptance_tests()
             self.develop()
             self.review()
@@ -204,7 +206,32 @@ class Pipeline:
             self.escalate(Escalation(self.state.stage, f"internal error: {type(e).__name__}: {str(e)[:300]}"))
             return 3
         finally:
+            self._dry_run_cleanup()
             self.save()
+
+    def _dry_run_cleanup(self) -> None:
+        """A dry run leaves nothing behind in the checkout: what the agents produced is kept as a patch in the run
+        record, then the repository goes back to where it was. The branch is never deleted (autodeliver deletes no branch,
+        ever); the next dry run simply takes a new `-dryrun-N` name. `--keep-branch` also stays on the branch."""
+        s = self.state
+        if not self.dry_run or self.keep_branch or not s.branch or not s.restore_ref:
+            return
+        try:
+            tip = s.commit_sha
+            patch = self.git.diff_against(s.base_sha, tip) if tip else self.git.diff_against(s.base_sha)
+            new_files = [] if tip else self.git.untracked()
+            for rel in new_files:                                   # files the agents created and did not commit
+                target = self.work / "dry-run-files" / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(self.repo / rel, target)
+            if patch.strip() or new_files:
+                self._write("dry-run.patch", patch)
+            self.git.switch_back(s.restore_ref)
+            s.log("cleanup", f"dry run: back on {s.restore_ref[:12]}, branch {s.branch} kept (never deleted); "
+                             + (f"changes kept in dry-run.patch" + (f" and {len(new_files)} new file(s) in dry-run-files/" if new_files else "")
+                                if patch.strip() or new_files else "no changes were made"))
+        except Exception as e:  # noqa: BLE001 - cleanup must never hide the result of the run
+            s.log("cleanup", f"dry run cleanup failed ({str(e)[:200]}): the branch {s.branch} was kept")
 
     # ===== fetch + eligibility =========================================================================
     def eligibility(self) -> None:
@@ -315,7 +342,13 @@ class Pipeline:
         name = self.cfg["branch"]["pattern"].format(
             id=self.state.work_item_id, slug=slugify(self.wi.title, self.cfg["branch"]["slug_max_length"]))
         if self.git.branch_exists(name):
-            raise Escalation("prepare", f"branch {name} already exists; a previous run or a human owns it")
+            if not self.dry_run:
+                raise Escalation("prepare", f"branch {name} already exists; a previous run or a human owns it")
+            n = 2                                                    # dry runs never reuse or delete: take a free name
+            while self.git.branch_exists(f"{name}-dryrun-{n}"):
+                n += 1
+            name = f"{name}-dryrun-{n}"
+        self.state.restore_ref = self.git.current_ref()
         self.git.create_branch(name, base_ref)
         self.state.branch = name
         self.base = self.state.base_sha = self.git.resolve(base_ref)
@@ -403,6 +436,66 @@ class Pipeline:
         raise Escalation("plan", "analysis did not pass its gates within the loop limit "
                                  "(an existing/additional disagreement means a human must confirm the baseline)",
                          [gates.summarise(last)])
+
+    # ===== board: the item and its child tasks move together ============================================
+    def _mover(self) -> workflow.Mover:
+        if not hasattr(self, "_mover_obj"):
+            self._mover_obj = workflow.Mover(self.ado)
+        return self._mover_obj
+
+    def _record_changes(self, phase: str, changes: list[dict[str, Any]]) -> None:
+        for c in changes:
+            c["phase"] = phase
+        self.state.status_changes += changes
+
+    def start_work(self) -> None:
+        """Plan approved: the item and its open children go to 'in progress' (a dry run only reports it)."""
+        cfg = self.cfg["on_start"]
+        if not cfg.get("transition"):
+            return
+        try:
+            changes, notes = self._mover().plan(self.wi, list(cfg["in_progress_states"]), cascade=bool(cfg.get("cascade_children")))
+        except Exception as e:  # noqa: BLE001 - board hygiene never stops a delivery
+            self.state.log("start", f"could not plan the board update: {str(e)[:200]}")
+            return
+        for n in notes:
+            self.state.log("start", n)
+        if not changes:
+            self.state.log("start", "board already shows the work as started")
+            return
+        if self.dry_run:
+            self.state.log("start", "dry run: would move " + "; ".join(workflow.describe(changes)))
+            self._record_changes("start (dry run)", changes)
+            return
+        problems = self._mover().apply(changes)
+        self._record_changes("start", changes)
+        self.state.log("start", "moved " + "; ".join(workflow.describe(changes)))
+        for p in problems:
+            self.state.log("start", p)
+        self.save()
+
+    def _cascade_to_children(self) -> list[str]:
+        """After the PR exists: open children follow the item to the dev-done state their type has."""
+        ok = self.cfg["on_success"]
+        if not (ok.get("transition") and ok.get("cascade_children")):
+            return []
+        now = {str(c["id"]): c["to"] for c in self.state.status_changes if c.get("phase") == "start" and c.get("done")}
+        changes, notes = self._mover().plan(self.wi, list(ok["dev_done_states"]), cascade=True, include_item=False,
+                                            child_current=now)
+        notes += self._mover().apply(changes)
+        self._record_changes("success", changes)
+        return workflow.describe(changes) + notes
+
+    def _restore_board(self) -> None:
+        """A run that stops after it moved cards puts them back, so the board never claims work that did not land."""
+        if self.dry_run or not self.cfg["on_start"].get("restore_on_escalate"):
+            return
+        started = [c for c in self.state.status_changes if c.get("phase") == "start" and c.get("done")]
+        if not started:
+            return
+        for p in self._mover().revert(started):
+            self.state.log(self.state.stage, p)
+        self.state.log(self.state.stage, "board restored: " + "; ".join(f"AB#{c['id']} -> {c['from']}" for c in started if c.get("reverted")))
 
     def _write_notes(self) -> None:
         """Same notes file azure-workitem-flow resumes from, so a human can take over an escalated item."""
@@ -712,6 +805,9 @@ class Pipeline:
         self.ado.add_pr_thread(pr["pullRequestId"], evidence)
         self.state.pr_url = self.ado.pr_web_url(pr)
         self._apply_resolution()
+        moved = self._cascade_to_children()
+        if moved and self.state.resolution is not None:
+            self.state.resolution["notes"] += [f"child work items: {m}" for m in moved]
         ok = self.cfg["on_success"]
         tags = [t for t in self.wi.tags if t.lower() != str(ok.get("remove_tag", "")).lower()] + [ok["add_tag"]]
         self.ado.set_tags(wid, tags)
@@ -782,6 +878,7 @@ class Pipeline:
         questions = [q if not self._has_phi(str(q)) else "(withheld: possible personal data, see escalation.md in the run record)"
                      for q in e.questions]
         try:
+            self._restore_board()
             if cfg.get("comment"):
                 self.ado.comment(self.state.work_item_id, report.escalation_html(self.state, e.stage, e.reason, questions))
             self.ado.set_tags(self.state.work_item_id, [*self.wi.tags, cfg["add_tag"]])

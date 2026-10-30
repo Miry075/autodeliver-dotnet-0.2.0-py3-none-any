@@ -34,8 +34,11 @@ No variable set: the Claude Code login on this machine (the user's subscription;
 | Offline dry run (no ADO) | `autodeliver run --work-item <ID> --dry-run --story-file story.json` |
 | Real run (normally only in the pipeline) | `autodeliver run --work-item <ID>` or `--next` |
 | Merged configuration | `autodeliver config show` |
+| After the merge: item and tasks to Done | `autodeliver complete --work-item <ID>` (add `--yes` to apply) |
 
-Exit codes: 0 draft PR or dry run done, 1 not eligible, 2 escalated to a human, 3 internal or config error. A dry run still creates a local branch and commits. Tell the user to delete it afterwards.
+Exit codes: 0 draft PR or dry run done, 1 not eligible, 2 escalated to a human, 3 internal or config error. A dry run works on a local branch and then puts the repository back where it started; the branch is kept (autodeliver never deletes a branch; the next dry run takes a `-dryrun-N` name) and what the agents produced stays in `.work/autodeliver/<ID>/dry-run.patch` (plus `dry-run-files/` for files they left untracked).
+
+Board: a real run moves the item and its open child tasks to Doing when the plan is approved, children follow at the draft PR, and a run that stops puts the cards back. After the merge, `autodeliver complete --work-item <ID>` lists the moves to Done; add `--yes` to apply.
 
 Before a real run outside the pipeline, confirm with the user. It pushes a branch, opens a draft PR and comments on the ticket.
 

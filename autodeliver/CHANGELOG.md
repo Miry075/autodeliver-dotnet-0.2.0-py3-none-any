@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0
+- **The board follows the work.** When the plan is approved (real runs), the work item and its still-open child tasks move from To Do to the process's in-progress state (Doing / Active / In Progress). After the draft PR exists, open children follow the item to the dev-done state their type has. If the run stops later, every card it moved goes back to its previous state. A dry run only lists what it would move (`dry run: would move ...` in the run log). Finished children (Done, Resolved...) are never touched, Closed is never written, and a state the process rejects is reported in the evidence pack ("### Board") instead of stopping the delivery. Config: `on_start`, `on_success.cascade_children`.
+- New command `autodeliver complete --work-item ID [--yes] [--force]`: after the merge, moves the item and its child tasks to Done (Resolved on Agile). Without `--yes` it only lists the moves; it refuses an item that lacks the `autodeliver-pr` tag unless `--force`. Config: `on_complete`.
+- **autodeliver never deletes a branch.** The 0.6.2 dry-run cleanup ran `git branch -D` on its own dry-run branch; that is gone. A dry run still returns the checkout to where it started and keeps the result as `dry-run.patch`, but leaves its branch; the next dry run on the same item takes a free `-dryrun-N` name. A test fails if any branch-deleting git call is ever added.
+
+## 0.6.2
+- A dry run no longer leaves a `feature/<id>-...` branch behind (which made the next run stop with "branch already exists"). When it ends, the repository goes back to the branch or commit it started on, the local branch is deleted, and the result is kept as `dry-run.patch` (and `dry-run-files/` for files the agents left untracked) in the run record. `--keep-branch` skips this. Real runs are unchanged.
+
+## 0.6.1
+- Fix: every stage ended with "agent failure: no structured output". The Claude CLI makes the model return its result by calling a `StructuredOutput` tool, and the tool policy denied it as an unknown tool, so no stage could return anything. The policy now allows `StructuredOutput` (and still denies every other unknown tool).
+- A stage that ends without structured output now reports the stop reason, the turns, the calls the policy denied, the model's final text and the transcript file, and the transcript records the final result.
+
 ## 0.6.0
 
 ### Criteria from the parent story (Epic > Issue > Task)

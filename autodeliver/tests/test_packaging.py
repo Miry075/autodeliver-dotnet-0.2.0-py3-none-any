@@ -244,3 +244,25 @@ def test_skill_frontmatter_is_accepted_by_the_upload_validator():
     assert len(re.search(r"^description:[ \t]*(.+)$", front, re.M).group(1)) <= 1024
     import runpy
     runpy.run_path(str(ROOT / "scripts" / "build_dist.py"), run_name="not_main")["validate"]()
+
+
+def test_complete_lists_then_moves_item_and_children_to_done(monkeypatch, tmp_path, capsys):
+    from autodeliver import cli, ado as adomod
+    from autodeliver.ado import WorkItem
+
+    class Fake:
+        def __init__(self, cfg): self.writes = []
+        def get_work_item(self, wid):
+            return WorkItem(id=wid, type="Issue", state="Doing", title="t", description_text="", acceptance_text="",
+                            acceptance_html="", tags=["autodeliver-pr"],
+                            linked=[{"id": "7", "relation": "child", "type": "Task", "title": "x", "state": "Doing"},
+                                    {"id": "8", "relation": "child", "type": "Task", "title": "y", "state": "Done"}])
+        def type_states(self, t): return ["To Do", "Doing", "Done"]
+        def set_state(self, wid, state): FAKE.writes.append((wid, state))
+    FAKE = Fake({})
+    monkeypatch.setattr(adomod, "AzureDevOps", lambda cfg: FAKE)
+    monkeypatch.setattr(cli, "load_config", lambda *a, **k: __import__("autodeliver.config", fromlist=["x"]).defaults())
+    assert cli.main(["complete", "--work-item", "5", "--repo", str(tmp_path)]) == 0
+    assert FAKE.writes == [] and "would move AB#5" in capsys.readouterr().out          # lists only without --yes
+    assert cli.main(["complete", "--work-item", "5", "--yes", "--repo", str(tmp_path)]) == 0
+    assert FAKE.writes == [(5, "Done"), (7, "Done")]                                    # 8 is already Done

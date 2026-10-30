@@ -275,12 +275,46 @@ def cmd_run(args: argparse.Namespace) -> int:
             args.work_item = found
     work = repo / ".work" / "autodeliver" / str(args.work_item)
     agents = AgentRunner(repo, cfg, work / "transcripts")
-    pipeline = Pipeline(cfg, repo, args.work_item, ado, agents, dry_run=args.dry_run)
+    pipeline = Pipeline(cfg, repo, args.work_item, ado, agents, dry_run=args.dry_run, keep_branch=args.keep_branch)
     code = pipeline.run()
     s = pipeline.state
     print(f"autodeliver AB#{args.work_item}: {s.status} at {s.stage} · loops {s.loops} · ${s.cost_usd:.2f}"
           + (f" · {s.pr_url}" if s.pr_url else "") + f" · details {work}")
     return code
+
+
+def cmd_complete(args: argparse.Namespace) -> int:
+    """After the merge: the item and its child tasks go to Done. A human decision, so it asks for --yes."""
+    from .ado import AzureDevOps
+    from .workflow import Mover, describe
+
+    cfg = load_config(args.repo.resolve(), args.config)
+    try:
+        ado = AzureDevOps(cfg)
+    except RuntimeError as e:
+        print(f"autodeliver: {e}", file=sys.stderr)
+        return 3
+    wi = ado.get_work_item(args.work_item)
+    oc = cfg["on_complete"]
+    need = str(oc.get("require_tag", "")).lower()
+    if need and need not in [t.lower() for t in wi.tags] and not args.force:
+        print(f"autodeliver: AB#{wi.id} has no '{oc['require_tag']}' tag, so autodeliver did not deliver it. Use --force to move it anyway.",
+              file=sys.stderr)
+        return 3
+    mover = Mover(ado)
+    changes, notes = mover.plan(wi, list(oc["done_states"]), cascade=bool(oc.get("cascade_children")))
+    for line in describe(changes) + notes:
+        print(("would move " if not args.yes else "move ") + line if line.startswith("AB#") else f"note: {line}")
+    if not changes:
+        print("nothing to move")
+        return 0
+    if not args.yes:
+        print("\nNothing written. Add --yes to apply (confirm the PR is merged first).")
+        return 0
+    problems = mover.apply(changes)
+    for p in problems:
+        print(f"autodeliver: {p}", file=sys.stderr)
+    return 4 if problems else 0
 
 
 class _ReadOnly:
@@ -339,10 +373,19 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--work-item", type=int)
     target.add_argument("--next", action="store_true", help="pick the oldest tagged, unblocked work item")
     p.add_argument("--dry-run", action="store_true", help="no Azure DevOps writes, no push, no PR")
+    p.add_argument("--keep-branch", action="store_true",
+                   help="dry run only: leave the local branch and its commit in place instead of returning to where the run started")
     p.add_argument("--yes", action="store_true", help="confirm a real (non-dry) run from a terminal; not needed in a pipeline")
     p.add_argument("--story-file", type=Path, help="dry run only: JSON work item instead of Azure DevOps")
     p.add_argument("--config", type=Path, help="overlay file (default: <repo>/.autodeliver/config.yml)")
     p.set_defaults(func=cmd_run)
+
+    p = with_repo(sub.add_parser("complete", help="after the merge: move a delivered work item and its child tasks to Done"))
+    p.add_argument("--work-item", type=int, required=True)
+    p.add_argument("--yes", action="store_true", help="apply (without it the moves are only listed)")
+    p.add_argument("--force", action="store_true", help="also for an item autodeliver did not deliver (no autodeliver-pr tag)")
+    p.add_argument("--config", type=Path, help="overlay file (default: <repo>/.autodeliver/config.yml)")
+    p.set_defaults(func=cmd_complete)
     return ap
 
 

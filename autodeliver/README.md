@@ -36,7 +36,7 @@ Manually, or in a pipeline:
 
 ```bash
 # in a virtual environment
-pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.6.0"
+pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.7.0"
 autodeliver --version
 ```
 
@@ -59,7 +59,7 @@ Then do the Azure DevOps side once: pipeline, variable group `autodeliver-secret
 |---|---|
 | Pipeline | Queue `.azuredevops/autodeliver.yml` with `workItemId`, or let the weekday schedule take the oldest ticket tagged `auto-deliver` |
 | Real run from a terminal (pushes, opens a draft PR, writes to the ticket) | `autodeliver run --work-item 12345 --yes`; without `--yes` it refuses. In a pipeline no flag is needed |
-| Local dry run (reads ADO, writes nothing) | `autodeliver run --work-item 12345 --dry-run` (needs `AZURE_DEVOPS_PAT`; Claude login, see below) |
+| Local dry run (reads ADO, writes nothing; returns the checkout to where it was and keeps the result as `.work/autodeliver/<id>/dry-run.patch`; `--keep-branch` keeps the branch) | `autodeliver run --work-item 12345 --dry-run` (needs `AZURE_DEVOPS_PAT`; Claude login, see below) |
 | Offline dry run | `autodeliver run --work-item 1 --dry-run --story-file story.json` |
 | Merged config | `autodeliver config show` |
 

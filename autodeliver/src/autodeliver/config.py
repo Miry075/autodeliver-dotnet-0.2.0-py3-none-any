@@ -25,7 +25,7 @@ MANDATORY_DENY = [".autodeliver/**", ".azuredevops/**"]
 
 REQUIRED_SECTIONS = [
     "azure_devops", "spec", "eligibility", "branch", "commit", "scope", "dotnet", "tests", "mutation", "phi",
-    "sonar", "loops", "models", "budget", "plan_check", "on_escalate", "on_success", "tools",
+    "sonar", "loops", "models", "budget", "plan_check", "on_start", "on_escalate", "on_success", "on_complete", "tools",
 ]
 REQUIRED_LOOPS = ["plan", "tests", "dev", "review", "quality"]
 REQUIRED_MODELS = ["mapper", "triage", "planner", "plan_checker", "test_author", "developer", "reviewer", "pr_writer"]
@@ -115,6 +115,12 @@ def validate(cfg: dict[str, Any], *, require_remote: bool = True) -> None:
         raise ConfigError("on_success.dev_done_states must not contain Closed: closing is the reviewer's or tester's call")
     if cfg["on_success"].get("transition") and not states:
         raise ConfigError("on_success.dev_done_states is empty while transition is enabled")
+    for section, key in (("on_start", "in_progress_states"), ("on_complete", "done_states")):
+        names = [str(x).strip().lower() for x in cfg[section].get(key, [])]
+        if "closed" in names:
+            raise ConfigError(f"{section}.{key} must not contain Closed: closing is the reviewer's or tester's call")
+        if not names and (section == "on_complete" or cfg[section].get("transition")):
+            raise ConfigError(f"{section}.{key} is empty")
     if float(cfg["on_success"].get("max_hours", 0)) <= 0:
         raise ConfigError("on_success.max_hours must be positive")
     if float(cfg["budget"]["max_total_usd"]) <= 0:

@@ -32,6 +32,7 @@ class RunState:
     cost_usd: float = 0.0
     branch: str | None = None
     base_sha: str | None = None
+    restore_ref: str | None = None                                   # where a dry run returns to (branch name or commit)
     baseline_warnings: int | None = None
     acs: list[dict[str, str]] = field(default_factory=list)          # AC-n from the Acceptance Criteria field
     security: list[dict[str, str]] = field(default_factory=list)     # SC-n from the Security Criteria field
@@ -45,6 +46,7 @@ class RunState:
     frozen_test_files: list[str] = field(default_factory=list)
     frozen_hashes: dict[str, str] = field(default_factory=dict)      # tests stay in the working tree until the one commit
     effort: dict[str, Any] | None = None                             # reviewer's human-equivalent estimate
+    status_changes: list[dict[str, Any]] = field(default_factory=list)   # board moves of the item and its children
     resolution: dict[str, Any] | None = None                         # what step 8 wrote
     gate_results: list[dict[str, Any]] = field(default_factory=list)
     review: dict[str, Any] | None = None

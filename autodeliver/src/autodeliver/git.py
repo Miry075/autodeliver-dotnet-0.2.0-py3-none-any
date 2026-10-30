@@ -90,6 +90,25 @@ class Git:
                 return proc.stdout if proc.returncode == 0 else None
         return None
 
+    def current_ref(self) -> str:
+        """The branch name, or the commit when HEAD is detached: where to come back to."""
+        name = self.run("symbolic-ref", "--short", "-q", "HEAD", check=False).strip()
+        return name or self.head()
+
+    def switch_back(self, ref: str) -> None:
+        """Leave a run's branch for `ref`: discards that branch's working-tree changes and untracked files that are
+        not ignored (the tree was verified clean when the run started)."""
+        detach = len(ref) == 40 and all(c in "0123456789abcdef" for c in ref)
+        self.run("checkout", "--quiet", "--force", *(["--detach"] if detach else []), ref)
+        self.run("clean", "--quiet", "-fd")
+
+    def diff_against(self, base: str, ref: str | None = None) -> str:
+        args = ["diff", "--no-color", "--no-ext-diff", "--binary", base]
+        return self.run(*(args + ([ref] if ref else [])))
+
+    def untracked(self) -> list[str]:
+        return [norm(p) for p in self.run("ls-files", "--others", "--exclude-standard").splitlines() if p.strip()]
+
     def head(self) -> str:
         return self.resolve("HEAD")
 

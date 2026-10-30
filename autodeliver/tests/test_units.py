@@ -720,3 +720,75 @@ def test_inherit_settings_are_validated(cfg):
         broken["azure_devops"][key] = bad
         with pytest.raises(ConfigError, match="inherit"):
             validate(broken, require_remote=False)
+
+
+# --- v0.6.1: the CLI returns stage results through a StructuredOutput tool call ---------------------------
+def test_policy_lets_the_cli_hand_back_structured_output_but_nothing_else_unknown(tmp_path: Path):
+    from autodeliver.agents import policy_hook_output
+    p = ToolPolicy(tmp_path)
+    assert p.decide("StructuredOutput", {"ac_baseline": []})[0]
+    out = policy_hook_output(p, {"tool_name": "StructuredOutput", "tool_input": {"x": 1}})
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow" and p.denials == []
+    for tool in ("WebFetch", "Task", "ToolSearch", "mcp__x__y"):
+        assert not p.decide(tool, {})[0]
+
+
+def _fake_sdk(monkeypatch, result_kwargs):
+    import sys
+    import types
+
+    class Block:
+        pass
+
+    class Result:
+        def __init__(self, **kw): self.__dict__.update(kw)
+
+    class Client:
+        def __init__(self, options): self.options = options
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def query(self, prompt): self.prompt = prompt
+        async def receive_response(self):
+            yield Result(**result_kwargs)
+
+    mod = types.ModuleType("claude_agent_sdk")
+    mod.AssistantMessage = type("AssistantMessage", (), {})
+    mod.TextBlock = type("TextBlock", (), {})
+    mod.ResultMessage = Result
+    mod.ClaudeSDKClient = Client
+    mod.ClaudeAgentOptions = lambda **kw: types.SimpleNamespace(**kw)
+    mod.HookMatcher = lambda **kw: types.SimpleNamespace(**kw)
+    types_mod = types.ModuleType("claude_agent_sdk.types")
+    types_mod.PermissionResultAllow = lambda **kw: ("allow", kw)
+    types_mod.PermissionResultDeny = lambda **kw: ("deny", kw)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", mod)
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk.types", types_mod)
+
+
+def test_a_stage_without_structured_output_explains_itself(tmp_path, cfg, monkeypatch):
+    from autodeliver.agents import AgentError, AgentRunner
+    _fake_sdk(monkeypatch, dict(subtype="success", is_error=False, stop_reason="end_turn", num_turns=3, total_cost_usd=0.01,
+                                result="I could not find the tool to return my answer.", structured_output=None,
+                                errors=None, session_id="s"))
+    runner = AgentRunner(tmp_path, cfg, tmp_path / "t")
+    policy = ToolPolicy(tmp_path)
+    policy.denials.append("Bash: command not allowed")
+    with pytest.raises(AgentError) as e:
+        runner.run("mapper", "mapper", {"work_item_id": "1", "work_item_type": "Task", "title": "t", "description": "d",
+                                       "acceptance_criteria": [], "criteria_source": "x", "security_criteria": "-", "comments": "-",
+                                       "linked": "-", "conventions": ["-"], "code_map": {}}, policy, 1.0, 1)
+    msg = str(e.value)
+    assert "no structured output" in msg and "end_turn" in msg and "Bash: command not allowed" in msg and "could not find the tool" in msg
+    lines = (tmp_path / "t" / "mapper-1.jsonl").read_text().splitlines()
+    assert '"result"' in lines[-1] and '"structured": false' in lines[-1]
+
+
+def test_a_stage_with_structured_output_returns_it(tmp_path, cfg, monkeypatch):
+    from autodeliver.agents import AgentRunner
+    _fake_sdk(monkeypatch, dict(subtype="success", is_error=False, stop_reason="end_turn", num_turns=2, total_cost_usd=0.02,
+                                result="", structured_output={"locations": []}, errors=None, session_id="s"))
+    out = AgentRunner(tmp_path, cfg, tmp_path / "t").run(
+        "mapper", "mapper", {"work_item_id": "1", "work_item_type": "Task", "title": "t", "description": "d",
+                             "acceptance_criteria": [], "criteria_source": "x", "security_criteria": "-", "comments": "-",
+                             "linked": "-", "conventions": ["-"]}, ToolPolicy(tmp_path), 1.0, 1)
+    assert out.output == {"locations": []} and out.turns == 2

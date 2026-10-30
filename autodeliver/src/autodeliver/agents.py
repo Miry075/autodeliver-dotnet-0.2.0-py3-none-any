@@ -164,7 +164,9 @@ class ToolPolicy:
             if searches_dir and data.get("output_mode") == "content":
                 return False, "content search is limited to a single file; search the directory for file names first"
             return True, "ok"
-        if tool == "TodoWrite":
+        if tool in ("TodoWrite", "StructuredOutput"):
+            # StructuredOutput is how the Claude CLI hands back the schema-validated JSON the pipeline reads. The CLI makes
+            # the model call it as a normal tool, so denying it here means no stage can ever return a result.
             return True, "ok"
         return False, f"tool {tool} is not available in this pipeline"
 
@@ -301,11 +303,17 @@ class AgentRunner:
                             log.write(json.dumps({"assistant": text[:2000]}) + "\n")
                     elif isinstance(message, ResultMessage):
                         result = message
+                        log.write(json.dumps({"result": {"subtype": message.subtype, "stop_reason": message.stop_reason,
+                                                         "turns": message.num_turns, "text": str(message.result or "")[:1000],
+                                                         "structured": isinstance(message.structured_output, dict)}}) + "\n")
         if result is None:
             raise AgentError(role, "no result message")
         cost = float(result.total_cost_usd or 0.0)
         if result.subtype != "success" or result.is_error:
             raise AgentError(role, f"{result.subtype} / {result.stop_reason}: {result.errors or result.result}", cost)
         if not isinstance(result.structured_output, dict):
-            raise AgentError(role, "no structured output", cost)
+            raise AgentError(role, "no structured output "
+                             f"(stop reason: {result.stop_reason}; turns: {result.num_turns}; "
+                             f"tool calls denied by the policy: {policy.denials[:3] or 'none'}; "
+                             f"final text: {str(result.result or '')[:300]!r}; transcript: {transcript.name})", cost)
         return AgentResult(result.structured_output, cost, result.num_turns, result.session_id, list(policy.denials))
