@@ -62,6 +62,10 @@ def evidence_pack(state: RunState) -> str:
         m = met.get(ac["id"], {})
         lines.append(f"| {ac['id']} | {_cell(ac['text'])} | {', '.join(tests_for.get(ac['id'], [])) or '—'} | "
                      f"{'met' if m.get('met') else 'NOT MET' if m else 'n/a'} |")
+    deferred = [a for a in state.acs if base.get(a["id"], {}).get("kind") == "deferred"]
+    if deferred:
+        lines += ["", "### Deferred to other work items (criteria inherited from the parent story)", "| AC | Criterion | Delivered by |", "|---|---|---|"]
+        lines += [f"| {a['id']} | {_cell(a['text'])} | {_cell(base[a['id']].get('note', ''), 80)} |" for a in deferred]
     if state.security:
         lines += ["", "### Security criteria", "| SC | Criterion | Reviewer | Evidence |", "|---|---|---|---|"]
         for sc in state.security:

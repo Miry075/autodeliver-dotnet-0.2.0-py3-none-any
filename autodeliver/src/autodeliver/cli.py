@@ -34,7 +34,8 @@ PIPELINE_PATH = Path(".azuredevops") / "autodeliver.yml"
 PROCESSES = {
     "agile": ("", ""),
     "basic": (
-        "  criteria_section: Acceptance criteria   # no Acceptance Criteria field in Basic: read the criteria from this section of the Description\n",
+        "  criteria_section: Acceptance criteria   # no Acceptance Criteria field in Basic: read the criteria from this section of the Description\n"
+        "  inherit_criteria: parent                # a Task takes the criteria of its parent Issue (Epic > Issue > Task)\n",
         "\n# Azure DevOps Basic process: Issue / Task; states To Do / Doing / Done\n"
         "eligibility:\n  work_item_types: [Issue, Task]\n  allowed_states: [To Do, Doing]\n"
         "on_success:\n  dev_done_states: [Doing]               # never Done: a human completes the item\n\n",

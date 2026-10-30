@@ -141,6 +141,19 @@ class Pipeline:
                                 "requirement that only appears here) ---\n" + "\n".join(f"- {t}" for t in self.state.tracker_criteria))
             if any(a.get("source") == "spec" for a in self.state.acs):
                 source = f"the committed spec {self.state.spec['path']}"
+        if self.state.inherited:
+            inh = self.state.inherited
+            description += (f"\n\n--- Acceptance criteria inherited from the parent {inh['type']} #{inh['id']} '{inh['title']}' ---\n"
+                            "This work item is only part of that story. The scope of THIS change is the title and description above; "
+                            "a criterion that another work item of the story delivers is `deferred`, not part of this change.\n"
+                            + inh["description"])
+            if inh["siblings"]:
+                description += "\n\nOther work items of that story:\n" + "\n".join(
+                    f"- #{s['id']} {s['type']}: {s['title']} [{s['state']}]" for s in inh["siblings"])
+            deferred = [f"{b['ac_id']}: {b.get('note', '')}" for b in (self.state.plan or {}).get("ac_baseline", []) if b["kind"] == "deferred"]
+            if deferred:
+                description += "\n\nCriteria deferred to other work items (not part of this change):\n" + "\n".join(f"- {d}" for d in deferred)
+            source = f"the parent {inh['type']} #{inh['id']} ({inh['criteria_source']})"
         return {"work_item_id": str(self.state.work_item_id), "work_item_type": wi.type, "title": wi.title,
                 "description": description,
                 "acceptance_criteria": [{k: v for k, v in a.items() if k != "declared"} for a in self.state.acs],
@@ -152,7 +165,8 @@ class Pipeline:
     def _ac_baseline_vars(self) -> list[dict]:
         base = gates.baseline(self.state.plan)
         return [{**ac, "kind": base[ac["id"]]["kind"], "at_risk": base[ac["id"]].get("at_risk", False),
-                 "evidence": base[ac["id"]].get("evidence", [])} for ac in self.state.acs]
+                 "evidence": base[ac["id"]].get("evidence", [])} for ac in self.state.acs
+                if base[ac["id"]]["kind"] != "deferred"]            # deferred criteria are another work item's job
 
     def _out_of_scope(self, changed: list[str], allowed: list[str]) -> list[str]:
         deny = self.cfg["scope"]["deny_paths"]
@@ -216,12 +230,40 @@ class Pipeline:
             problems += self._adopt_spec(committed, tracker, tracker_security)
         elif self.cfg["spec"]["mode"] == "required":
             problems.append(f"no committed spec at {self.cfg['spec']['path'].format(id=self.state.work_item_id)}")
+        if committed is None and not self.state.acs and self.cfg["azure_devops"].get("inherit_criteria", "none") == "parent":
+            self._inherit_from_parent()
         if committed is None and len(self.state.acs) < el["min_acceptance_criteria"]:
             section = self.cfg["azure_devops"].get("criteria_section", "")
             problems.append(f"no usable acceptance criteria in the Acceptance Criteria field"
                             + (f" or the '{section}' section of the Description" if section else ""))
         if problems:
             raise Escalation("eligibility", "work item is not eligible for autonomous delivery", problems)
+
+    # ===== criteria inherited from the parent story (Epic > Issue/Story > Task) ============================
+    def _inherit_from_parent(self) -> None:
+        """A Task carries no criteria of its own: they sit on the story it belongs to. Walks up until a work item
+        has some. The Task's own title and description stay the scope of this change."""
+        depth = int(self.cfg["azure_devops"].get("inherit_max_depth", 3))
+        current = self.wi
+        for _ in range(depth):
+            if not current.parent_id:
+                return
+            parent = self.ado.get_work_item(current.parent_id)
+            found = extract_criteria(parent.acceptance_html, "AC")
+            if found:
+                own = str(self.state.work_item_id)
+                siblings = [{"id": l["id"], "type": l["type"], "title": l["title"], "state": l["state"]}
+                            for l in parent.linked if l["relation"] == "child" and l["id"] != own]
+                self.state.acs = [{**c, "source": f"parent #{parent.id}"} for c in found]
+                if not self.state.security:
+                    self.state.security = extract_criteria(parent.security_html, "SC")
+                self.state.inherited = {"id": parent.id, "type": parent.type, "title": parent.title,
+                                        "description": parent.description_text, "siblings": siblings,
+                                        "criteria_source": parent.criteria_source}
+                self.state.log("eligibility", f"{len(found)} acceptance criteria inherited from the parent {parent.type} "
+                                              f"#{parent.id} ({parent.criteria_source}); {len(siblings)} sibling work items")
+                return
+            current = parent
 
     # ===== the committed spec (agentic-SDLC convention) =================================================
     def _committed_spec(self) -> "specmod.Spec | None":
@@ -335,7 +377,8 @@ class Pipeline:
             if blockers or uncertain:
                 raise Escalation("plan", "the existing/additional baseline or a behaviour decision needs a human",
                                  uncertain + blockers)
-            shape = gates.plan_shape(plan, self._ac_ids(), self.cfg, lambda p: (self.repo / p).is_file())
+            shape = gates.plan_shape(plan, self._ac_ids(), self.cfg, lambda p: (self.repo / p).is_file(),
+                                     allow_deferred=bool(self.state.inherited))
             if not shape.passed:
                 last = [shape]
                 feedback = gates.summarise(last)
@@ -370,6 +413,10 @@ class Pipeline:
                   + (" [at risk: pinned]" if base[a['id']].get("at_risk") else "")
                   for a in self.state.acs if base[a["id"]]["kind"] == "existing"] or ["- none (net-new implementation)"]
         lines += ["", "## Additional AC"] + [f"- {a['id']}: {a['text']}" for a in self.state.acs if base[a["id"]]["kind"] == "additional"]
+        deferred = [a for a in self.state.acs if base[a["id"]]["kind"] == "deferred"]
+        if deferred:
+            lines += ["", "## Deferred to other work items (inherited criteria)"] + [
+                f"- {a['id']}: {a['text']} → {base[a['id']].get('note', '')}" for a in deferred]
         if self.state.security:
             lines += ["", "## Security criteria"] + [f"- {s['id']}: {s['text']}" for s in self.state.security]
         lines += ["", "## What", p.get("what", ""), "", "## Why", p.get("why", ""), "", "## Use cases"]

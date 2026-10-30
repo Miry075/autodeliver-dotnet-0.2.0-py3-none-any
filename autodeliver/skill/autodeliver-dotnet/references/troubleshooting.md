@@ -4,6 +4,8 @@
 |---|---|---|
 | exit 1, nothing happens | `auto-deliver` tag missing, or `autodeliver-blocked` still set | Add the tag, or clear the blocked tag after resolving the previous escalation |
 | eligibility: no usable acceptance criteria | AC written in the description, not in the Acceptance Criteria field | Move the AC into the field, one per list item. Azure DevOps Basic has no such field: `autodeliver init --process basic --force`, then write them under an **Acceptance criteria:** label in the Description |
+| eligibility: no usable acceptance criteria on a Task | The Task has none, and `azure_devops.inherit_criteria` is `none` or no ancestor within `inherit_max_depth` has any | `autodeliver init --process basic --force`, or write the criteria on the parent Issue under an **Acceptance criteria:** label |
+| plan: AC-n deferred … / plan says deferred, check says additional | One model thinks a sibling Task delivers that criterion, the other does not | Clarify the Task title and description, or move the criterion to the right Task |
 | eligibility: type/state not in the allowed lists | The project's process names them differently (Basic: Issue/Task, To Do/Doing) | `autodeliver init --process basic --force`, or set `eligibility.work_item_types` / `allowed_states` |
 | eligibility: risk tier is above `spec.max_risk_tier` or missing | The committed spec (`docs/specs/<id>.md`) is rated High (money, personal data, security, irreversible) or has no Risk tier | A human delivers it, or fill in the tier; raise `spec.max_risk_tier` only after a risk review |
 | eligibility: open question in the spec | `## Open questions` in the spec has unanswered items | Answer them in the spec (through a PR), then re-tag |

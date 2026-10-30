@@ -175,7 +175,7 @@ def pinned_existing_ac_ids(plan: dict) -> list[str]:
     return sorted(a for a, b in baseline(plan).items() if b["kind"] == "existing" and b.get("at_risk"))
 
 
-def plan_shape(plan: dict, ac_ids: list[str], cfg: dict, exists) -> GateResult:
+def plan_shape(plan: dict, ac_ids: list[str], cfg: dict, exists, allow_deferred: bool = False) -> GateResult:
     details: list[str] = []
     s = cfg["scope"]
     # existing-AC baseline first (azure-workitem-flow step 2)
@@ -187,6 +187,11 @@ def plan_shape(plan: dict, ac_ids: list[str], cfg: dict, exists) -> GateResult:
     for a, b in base.items():
         if b["kind"] == "existing" and not b.get("evidence"):
             details.append(f"{a}: classified existing without the code that satisfies it today")
+        if b["kind"] == "deferred":
+            if not allow_deferred:
+                details.append(f"{a}: deferred is only allowed for criteria inherited from a parent work item")
+            elif not str(b.get("note", "")).strip():
+                details.append(f"{a}: deferred without naming the work item that delivers it (note)")
     if base and not additional_ac_ids(plan):
         details.append("no additional criteria: nothing new to build (all criteria already implemented?)")
     # tests: every additional + at-risk existing AC, every in-scope use case

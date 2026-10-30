@@ -227,6 +227,7 @@ def test_init_process_basic_writes_a_valid_overlay_that_keeps_the_azure_devops_b
     assert cfg["azure_devops"]["project"] == "Proj" and cfg["azure_devops"]["criteria_section"] == "Acceptance criteria"
     assert cfg["eligibility"]["work_item_types"] == ["Issue", "Task"] and cfg["eligibility"]["allowed_states"] == ["To Do", "Doing"]
     assert cfg["on_success"]["dev_done_states"] == ["Doing"] and cfg["eligibility"]["required_tag"] == "auto-deliver"
+    assert cfg["azure_devops"]["inherit_criteria"] == "parent"
     default = tmp_path / "d"
     default.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(default)], check=True)

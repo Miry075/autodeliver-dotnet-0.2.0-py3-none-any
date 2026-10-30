@@ -36,7 +36,7 @@ Manually, or in a pipeline:
 
 ```bash
 # in a virtual environment
-pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.5.1"
+pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.6.0"
 autodeliver --version
 ```
 
@@ -114,6 +114,12 @@ This sets `azure_devops.criteria_section: Acceptance criteria`, allows the types
 ```
 
 Bullets or numbered lines are one criterion each; without bullets each line is one; a single paragraph is split into sentences (write bullets when a sentence contains abbreviations such as "e.g."). A filled Acceptance Criteria field always wins over the section.
+
+## Epic > Issue > Task: criteria from the parent story
+
+In many backlogs the acceptance criteria sit on the story and the Tasks under it carry only a title (the Basic process: Epic, Issue, Task). With `azure_devops.inherit_criteria: parent` (set by `init --process basic`), a work item that has no criteria of its own takes those of its parent, walking up to `inherit_max_depth` levels (default 3). The Task's own title and description stay the **scope** of the change; the parent's description and the list of sibling Tasks are given to every agent as context.
+
+A Task usually delivers only part of the story, so a criterion that a sibling Task delivers is classified `deferred` (with the sibling named in `note`). It is not tested here, not assessed by the reviewer, and listed in the notes and the evidence pack. Both the planner and the independent checker must classify it `deferred`, otherwise the run escalates. `deferred` is refused when the criteria are not inherited.
 
 ## Test runners
 

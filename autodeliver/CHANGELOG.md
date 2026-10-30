@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+### Criteria from the parent story (Epic > Issue > Task)
+- `azure_devops.inherit_criteria: parent` (`init --process basic` sets it) and `inherit_max_depth` (default 3): a work item without criteria of its own takes the criteria of its parent, found in the Acceptance Criteria field or in the Description section. Its own title and description remain the scope; the parent's description and the sibling Tasks are given to every agent.
+- New criterion kind `deferred` for criteria that a sibling Task delivers: needs the sibling named in `note`, only allowed for inherited criteria, must be agreed by the planner and the independent checker, is not tested or assessed here, and is reported in the notes and the evidence pack.
+- Triage judges testability only for the criteria the work item itself covers.
+
 ## 0.5.1
 - Skill upload: the skill description contained `<ID>`, which Claude's upload validator rejects as an XML tag ("SKILL.md description cannot contain XML tags"). Replaced by a plain example, and `scripts/build_dist.py` now fails the build on angle brackets or a description over 1024 characters.
 

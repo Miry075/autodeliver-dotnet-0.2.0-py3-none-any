@@ -453,3 +453,124 @@ def test_tracker_criteria_that_differ_from_the_spec_are_shown_to_triage(tmp_path
     assert code == 0 and len(p.state.tracker_criteria) == 2
     d = agents.variables["triage"]["description"]
     assert "Acceptance criteria as written in the tracker" in d and "within 24 hours" in d
+
+
+# --- v0.6.0: criteria inherited from the parent story (Epic > Issue > Task) --------------------------------
+PARENT_MD = ("**User story:** As a clinician I want closed episodes read-only.\n\n**Acceptance criteria:**\n"
+             "- Editing an open episode succeeds and stores the note\n- Editing a closed episode is refused with a domain error\n\n"
+             "**Priority:** Must")
+PARENT_MD_3 = PARENT_MD.replace("\n\n**Priority:**", "\n- Every refusal is exported to the central audit service\n\n**Priority:**")
+CHILD_LINKS = [{"id": "4242", "relation": "child", "type": "Task", "title": "Guard on the aggregate", "state": "To Do"},
+               {"id": "4243", "relation": "child", "type": "Task", "title": "Export refusals to the audit service", "state": "To Do"}]
+
+
+def basic_cfg(cfg):
+    cfg["azure_devops"]["criteria_section"] = "Acceptance criteria"
+    cfg["azure_devops"]["inherit_criteria"] = "parent"
+    cfg["eligibility"]["work_item_types"] = ["Issue", "Task"]
+    cfg["eligibility"]["allowed_states"] = ["To Do", "Doing"]
+    return cfg
+
+
+def task_story(parent_md=PARENT_MD, **over):
+    parent = {"title": "F09 Refuse edits", "type": "Issue", "state": "To Do", "description": parent_md, "linked": CHILD_LINKS}
+    return {"title": "Guard on the aggregate", "type": "Task", "state": "To Do", "tags": ["auto-deliver"],
+            "description": "done when dotnet build and dotnet test pass.", "parent_id": 138, "parents": {"138": parent}, **over}
+
+
+def test_a_task_inherits_the_acceptance_criteria_of_its_parent_issue(tmp_path, cfg):
+    p, code, repo, ado, agents = run_pipeline(tmp_path, basic_cfg(cfg), story=task_story())
+    assert code == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text() if code else ""
+    assert [(a["id"], a["source"]) for a in p.state.acs] == [("AC-1", "parent #138"), ("AC-2", "parent #138")]
+    assert p.state.inherited["id"] == 138 and [s["id"] for s in p.state.inherited["siblings"]] == ["4243"]       # not itself
+    for role in ("triage", "planner", "plan_checker", "reviewer"):
+        v = agents.variables[role]
+        assert "inherited from the parent Issue #138" in v["description"] and "Export refusals to the audit service" in v["description"]
+        assert "the parent Issue #138" in v["criteria_source"]
+        assert v["description"].startswith("done when dotnet build")                        # the Task's own text stays first
+    assert (repo / ".work/autodeliver/4242/evidence.md").exists()
+    assert git(repo, "status", "--porcelain") == ""
+
+
+def test_criteria_that_a_sibling_task_delivers_are_deferred_not_demanded(tmp_path, cfg):
+    story = task_story(PARENT_MD_3)
+
+    class Defer(FakeAgents):
+        def run(self, role, *a, **k):
+            r = super().run(role, *a, **k)
+            if role == "planner":
+                r.output["ac_baseline"].append({"ac_id": "AC-3", "kind": "deferred", "evidence": [], "at_risk": False,
+                                                "note": "delivered by #4243 (export refusals to the audit service)"})
+            if role == "plan_checker":
+                r.output["ac_classification"].append({"ac_id": "AC-3", "kind": "deferred", "evidence": ""})
+            return r
+    repo = make_repo(tmp_path)
+    agents = Defer(repo)
+    c = basic_cfg(cfg)
+    p = Pipeline(c, repo, 4242, OfflineAzureDevOps(story, c["azure_devops"]["criteria_section"]), agents, dry_run=True,
+                 dotnet_factory=lambda: FakeDotnet(repo))
+    assert p.run() == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text()
+    assert [a["id"] for a in p.state.acs] == ["AC-1", "AC-2", "AC-3"]
+    assert "AC-3" not in [a["id"] for a in agents.variables["developer"]["ac_baseline"]]        # not this change's job
+    assert "Criteria deferred to other work items" in agents.variables["reviewer"]["description"]
+    assert "AC-3" not in {t["ac_id"] for t in p.state.plan["test_plan"]}                         # no test demanded for it
+    assert "## Deferred to other work items" in (repo / ".work/autodeliver/4242/notes.md").read_text()
+    assert "Deferred to other work items" in (repo / ".work/autodeliver/4242/evidence.md").read_text()
+
+
+def test_deferral_needs_both_models_to_agree(tmp_path, cfg):
+    story = task_story(PARENT_MD_3)
+
+    class OneSided(FakeAgents):
+        def run(self, role, *a, **k):
+            r = super().run(role, *a, **k)
+            if role == "planner":
+                r.output["ac_baseline"].append({"ac_id": "AC-3", "kind": "deferred", "evidence": [], "at_risk": False, "note": "#4243"})
+            if role == "plan_checker":
+                r.output["ac_classification"].append({"ac_id": "AC-3", "kind": "additional", "evidence": ""})
+            return r
+    repo = make_repo(tmp_path)
+    c = basic_cfg(cfg)
+    p = Pipeline(c, repo, 4242, OfflineAzureDevOps(story, c["azure_devops"]["criteria_section"]), OneSided(repo), dry_run=True,
+                 dotnet_factory=lambda: FakeDotnet(repo))
+    assert p.run() == 2 and p.state.stage == "plan"
+    assert "AC-3: plan says deferred, independent check says additional" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+
+
+def test_deferral_is_refused_without_inheritance_or_without_a_named_work_item():
+    plan = {"ac_baseline": [{"ac_id": "AC-1", "kind": "additional", "evidence": [], "at_risk": False, "note": ""},
+                            {"ac_id": "AC-2", "kind": "deferred", "evidence": [], "at_risk": False, "note": ""}],
+            "test_plan": [{"ac_id": "AC-1", "use_case_ids": [], "test_file": "t.cs", "test_name": "x", "layer": "domain"}],
+            "use_cases": [], "tasks": [], "options": [], "chosen_option": ""}
+    from autodeliver import gates
+    from autodeliver.config import load_config
+    cfg = load_config(".", require_remote=False)
+    assert any("only allowed for criteria inherited" in d for d in gates.plan_shape(plan, ["AC-1", "AC-2"], cfg, lambda p: True).details)
+    assert any("without naming the work item" in d for d in gates.plan_shape(plan, ["AC-1", "AC-2"], cfg, lambda p: True, allow_deferred=True).details)
+
+
+def test_own_criteria_win_and_inheritance_can_be_switched_off(tmp_path, cfg):
+    c = basic_cfg(cfg)
+    own = task_story(description="**Acceptance criteria:**\n- Editing an open episode succeeds and stores the note\n"
+                                 "- Editing a closed episode is refused with a domain error")
+    p, code, repo, ado, agents = run_pipeline(tmp_path, c, story=own)
+    assert code == 0 and p.state.inherited is None and p.state.acs[0]["source"] != "parent #138"
+    c["azure_devops"]["inherit_criteria"] = "none"
+    sub = tmp_path / "none"
+    sub.mkdir()
+    p, code, repo, ado, agents = run_pipeline(sub, c, story=task_story())
+    assert code == 2 and "no usable acceptance criteria" in (repo / ".work/autodeliver/4242/escalation.md").read_text()
+
+
+def test_inheritance_walks_up_but_not_past_the_depth_limit(tmp_path, cfg):
+    story = task_story("(no criteria on the Issue)")
+    story["parents"]["138"]["parent_id"] = 100
+    story["parents"]["100"] = {"title": "Epic", "type": "Epic", "state": "To Do", "description": PARENT_MD, "linked": []}
+    c = basic_cfg(cfg)
+    p, code, repo, ado, agents = run_pipeline(tmp_path, c, story=story)
+    assert code == 0 and p.state.inherited["id"] == 100 and p.state.inherited["type"] == "Epic"
+    c["azure_devops"]["inherit_max_depth"] = 1
+    sub = tmp_path / "shallow"
+    sub.mkdir()
+    p, code, repo, ado, agents = run_pipeline(sub, c, story=story)
+    assert code == 2 and p.state.inherited is None

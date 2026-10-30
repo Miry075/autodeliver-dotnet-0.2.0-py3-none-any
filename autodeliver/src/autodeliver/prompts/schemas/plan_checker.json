@@ -15,7 +15,8 @@
             "enum": [
               "existing",
               "additional",
-              "uncertain"
+              "uncertain",
+              "deferred"
             ]
           },
           "evidence": {

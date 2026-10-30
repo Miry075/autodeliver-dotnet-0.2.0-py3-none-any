@@ -47,6 +47,7 @@ class WorkItem:
     completed_work: float | None = None
     remaining_work: float | None = None
     criteria_source: str = "the Acceptance Criteria field"      # or "the '<label>' section of the Description"
+    parent_id: int | None = None
 
 
 class _ListParser(HTMLParser):
@@ -228,6 +229,8 @@ class AzureDevOps:
             completed_work=_num(f.get(COMPLETED)),
             remaining_work=_num(f.get(REMAINING)),
             criteria_source=source,
+            parent_id=next((int(r["url"].rstrip("/").rsplit("/", 1)[-1]) for r in (data.get("relations") or [])
+                            if r.get("rel") == "System.LinkTypes.Hierarchy-Reverse"), None),
         )
 
     def _comments(self, wid: int) -> list[str]:
@@ -321,7 +324,7 @@ class OfflineAzureDevOps:
         self.writes: list[tuple[str, Any]] = []
 
     def get_work_item(self, wid: int) -> WorkItem:
-        s = self.story
+        s = self.story.get("parents", {}).get(str(wid), self.story)      # a story file may carry its parents
 
         def as_list(key_html: str, key_list: str) -> str:
             raw = s.get(key_html) or "".join(f"<li>{html.escape(a)}</li>" for a in s.get(key_list, []))
@@ -338,7 +341,7 @@ class OfflineAzureDevOps:
                         security_html=as_list("security_html", "security_criteria"),
                         comments=list(s.get("comments", [])), linked=list(s.get("linked", [])),
                         completed_work=_num(s.get("completed_work")), remaining_work=_num(s.get("remaining_work")),
-                        criteria_source=source)
+                        criteria_source=source, parent_id=s.get("parent_id"))
 
     def type_states(self, work_item_type: str) -> list[str]:
         return list(self.story.get("type_states", ["New", "Active", "Resolved", "Closed"]))

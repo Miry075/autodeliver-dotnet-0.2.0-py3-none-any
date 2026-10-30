@@ -694,3 +694,29 @@ def test_spec_config_values_are_validated(cfg):
         broken["spec"][key] = bad
         with pytest.raises(ConfigError, match="spec"):
             validate(broken)
+
+
+def test_azure_devops_reader_reports_the_parent_of_a_work_item(monkeypatch, cfg):
+    from autodeliver.ado import AzureDevOps
+
+    class Resp:
+        status_code, content = 200, b"{}"
+        def __init__(self, data): self._d = data
+        def json(self): return self._d
+    monkeypatch.setenv("AZURE_DEVOPS_PAT", "x")
+    ado = AzureDevOps(cfg)
+    rel = [{"rel": "System.LinkTypes.Hierarchy-Reverse", "url": "https://dev.azure.com/o/_apis/wit/workItems/138"},
+           {"rel": "ArtifactLink", "url": "vstfs:///Git/Commit/x"}]
+    fields = {"System.WorkItemType": "Task", "System.State": "To Do", "System.Title": "t", "System.Tags": "auto-deliver"}
+    ado.session.get = lambda url, **k: Resp({"comments": []} if "comments" in url else {"fields": fields, "relations": rel})
+    assert ado.get_work_item(179).parent_id == 138
+    ado.session.get = lambda url, **k: Resp({"comments": []} if "comments" in url else {"fields": fields, "relations": []})
+    assert ado.get_work_item(179).parent_id is None
+
+
+def test_inherit_settings_are_validated(cfg):
+    for key, bad in (("inherit_criteria", "grandparent"), ("inherit_max_depth", 9)):
+        broken = copy.deepcopy(cfg)
+        broken["azure_devops"][key] = bad
+        with pytest.raises(ConfigError, match="inherit"):
+            validate(broken, require_remote=False)

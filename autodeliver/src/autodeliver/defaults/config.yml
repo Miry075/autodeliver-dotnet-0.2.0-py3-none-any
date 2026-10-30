@@ -9,6 +9,8 @@ azure_devops:
   target_branch: main
   security_criteria_field: ""         # empty = auto-detect a field whose name ends with SecurityCriteria
   acceptance_criteria_field: Microsoft.VSTS.Common.AcceptanceCriteria
+  inherit_criteria: none              # parent = a work item without criteria of its own uses its parent story's (Epic > Issue/Story > Task)
+  inherit_max_depth: 3
   criteria_section: ""                # Basic process (no such field): label of the section of the Description that holds the criteria, e.g. "Acceptance criteria"
 
 spec:                                  # the agentic-SDLC convention: one reviewed spec per work item

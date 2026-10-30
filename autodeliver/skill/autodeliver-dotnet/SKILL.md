@@ -45,6 +45,7 @@ The stages follow the `azure-workitem-flow` conventions, with every human pause 
 
 1. **Fetch and eligibility.** Fields, comments, Security Criteria (SC-n) and linked items are read. The opt-in tag and AC-n criteria must be present.
 2. **Committed spec (optional).** If the repository follows the agentic-SDLC convention and `docs/specs/<ID>.md` exists on the target branch, it supplies the criteria (Existing and Acceptance criteria sections), the Security criteria, the Use cases, Edge cases and Non-goals. A Risk tier above `spec.max_risk_tier` (default Medium) and unanswered Open questions stop the run. The tracker's own criteria are shown to triage for comparison.
+   When a work item has no criteria of its own and `azure_devops.inherit_criteria` is `parent`, it inherits its parent story's. Its own title and description are the scope; criteria a sibling Task delivers are `deferred`.
 3. **Prepare.** `feature/<id>-<slug>` is created on a clean tree, and the baseline must be green.
 4. **Code map** (haiku), then **triage.** A criterion found only in a comment or the description escalates.
 5. **Analysis** (opus):

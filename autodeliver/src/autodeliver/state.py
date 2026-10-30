@@ -35,6 +35,7 @@ class RunState:
     baseline_warnings: int | None = None
     acs: list[dict[str, str]] = field(default_factory=list)          # AC-n from the Acceptance Criteria field
     security: list[dict[str, str]] = field(default_factory=list)     # SC-n from the Security Criteria field
+    inherited: dict[str, Any] | None = None                          # parent work item the criteria were taken from
     spec: dict[str, Any] | None = None                               # committed docs/specs/<id>.md, when the repo has one
     tracker_criteria: list[str] = field(default_factory=list)        # tracker criteria shown to triage when a spec took over
     code_map: dict[str, Any] | None = None

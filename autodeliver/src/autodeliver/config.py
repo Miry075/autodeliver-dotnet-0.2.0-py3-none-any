@@ -90,6 +90,10 @@ def validate(cfg: dict[str, Any], *, require_remote: bool = True) -> None:
         raise ConfigError("models.planner and models.plan_checker must differ (decorrelated check)")
     if cfg["models"]["developer"] == cfg["models"]["reviewer"]:
         raise ConfigError("models.developer and models.reviewer must differ (decorrelated review)")
+    if cfg["azure_devops"].get("inherit_criteria", "none") not in ("none", "parent"):
+        raise ConfigError("azure_devops.inherit_criteria must be none or parent")
+    if not 1 <= int(cfg["azure_devops"].get("inherit_max_depth", 3)) <= 5:
+        raise ConfigError("azure_devops.inherit_max_depth must be between 1 and 5")
     sp = cfg["spec"]
     if sp["mode"] not in ("auto", "required", "off"):
         raise ConfigError("spec.mode must be auto, required or off")

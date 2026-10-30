@@ -23,7 +23,7 @@ Paths the pipeline may never change: {{deny_paths}}
 Limits: at most {{max_tasks}} tasks and {{max_files}} files.
 
 Do this:
-1. For each acceptance criterion, decide whether it is testable as written, i.e. whether an automated test's pass or fail would be unambiguous. If yes, restate it precisely in `restated`. If no, set `testable: false` and say what is missing in `issue`.
+1. When the ticket text says the criteria are inherited from a parent story, judge only the criteria that this work item's own title and description cover. For a criterion that another work item of the story delivers, set `testable: true` and write `deferred: <that work item>` in `issue`; do not judge it. For each other acceptance criterion, decide whether it is testable as written, i.e. whether an automated test's pass or fail would be unambiguous. If yes, restate it precisely in `restated`. If no, set `testable: false` and say what is missing in `issue`.
 2. **Criteria that hide elsewhere.** List in `extra_criteria` every requirement stated in the description, an appended "additional AC" section, or a comment, that is not already covered by the acceptance criteria above. The text the criteria above were taken from is not an extra. Include comments that change or contradict a criterion. Quote the source briefly. The pipeline cannot confirm these with a human, so a human must add them to the criteria.
 3. List the true `blockers`: decisions only a human can make (unspecified behaviour, conflicting criteria, unknown business rule, a linked item that must land first). Do not list things you can answer from the code.
 4. Estimate the number of tasks and list the files that would change.
