@@ -354,3 +354,71 @@ def test_every_prompt_has_a_schema():
         if f.name.startswith("_"):
             continue
         assert (prompts / "schemas" / f"{f.stem}.json").is_file(), f"schema missing for {f.stem}"
+
+
+# --- v0.3.0: arguments that would escape the tool policy ----------------------------------------------
+@pytest.mark.parametrize("command", [
+    "git diff --output=/home/vsts/.bashrc HEAD",            # writes any file
+    "git diff --no-index /etc/passwd /dev/null",            # reads outside the repository
+    "git diff --ext-diff HEAD",                             # runs a configured program
+    "git log -Oorder.txt",
+    "git show HEAD:.env",                                   # NEVER_READ through git
+    "git diff -- secrets.prod.json",
+    "dotnet build -o /tmp/anywhere",                        # writes outside the repository
+    'dotnet test --logger "trx;LogFilePath=/home/x/r.trx"',
+    "dotnet test ../other/Other.csproj",
+    "dotnet test --results-directory .work/x",
+])
+def test_tool_policy_refuses_escaping_arguments(tmp_path: Path, command):
+    p = ToolPolicy(tmp_path, bash_allow=BASH_DOTNET)
+    assert not p.decide("Bash", {"command": command})[0]
+
+
+@pytest.mark.parametrize("command", [
+    "git show HEAD:src/A.cs", "git diff HEAD~1 -- src/A.cs", "git log --oneline -n 20", "git status --porcelain",
+    'dotnet test --filter "AC=AC-1"', "dotnet build src/App/App.csproj -c Release --nologo",
+    "dotnet test ./tests/A.Tests/A.Tests.csproj", "dotnet restore",
+])
+def test_tool_policy_keeps_ordinary_commands(tmp_path: Path, command):
+    assert ToolPolicy(tmp_path, bash_allow=BASH_DOTNET).decide("Bash", {"command": command})[0]
+
+
+def test_grep_cannot_print_never_read_files(tmp_path: Path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "A.cs").write_text("x")
+    ok = lambda data: ToolPolicy(tmp_path).decide("Grep", data)[0]
+    assert ok({"pattern": "x"}) and ok({"pattern": "x", "path": "src", "output_mode": "files_with_matches"})
+    assert ok({"pattern": "x", "path": "src/A.cs", "output_mode": "content"})
+    assert not ok({"pattern": "x", "output_mode": "content"})                  # whole repo, line output
+    assert not ok({"pattern": "x", "path": "src", "output_mode": "content"})
+    assert not ok({"pattern": "x", "path": ".env"}) and not ok({"pattern": "x", "path": "/etc"})
+
+
+def test_agent_shell_keeps_only_the_claude_credential():
+    from autodeliver.agents import AGENT_BLANKED_ENV
+    from autodeliver.dotnet import SECRET_ENV
+    assert "VSS_NUGET_ACCESSTOKEN" in AGENT_BLANKED_ENV and "SYSTEM_ACCESSTOKEN" in AGENT_BLANKED_ENV
+    assert set(SECRET_ENV) - set(AGENT_BLANKED_ENV) == {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}
+    assert {"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"} <= SECRET_ENV        # never reaches build/test
+
+
+# --- v0.3.0: Claude credentials ------------------------------------------------------------------------
+def test_claude_auth_mode_and_unexpanded_macros():
+    from autodeliver import auth
+    env = {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-x", "ANTHROPIC_API_KEY": "$(ANTHROPIC_API_KEY)", "SONAR_TOKEN": ""}
+    assert auth.drop_unexpanded(env) == ["ANTHROPIC_API_KEY", "SONAR_TOKEN"]
+    assert env == {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-x"} and auth.mode(env) == "subscription_token"
+    assert auth.mode({}) == "saved_login"
+    assert auth.mode({"ANTHROPIC_API_KEY": "k", "CLAUDE_CODE_OAUTH_TOKEN": "t"}) == "api_key"     # the CLI's precedence
+
+
+def test_doctor_ci_accepts_a_subscription_token(tmp_path, monkeypatch, capsys):
+    from autodeliver.cli import main
+    for name in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    main(["doctor", "--ci", "--repo", str(tmp_path)])
+    assert "FAIL  Claude credentials" in capsys.readouterr().out
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-x")
+    main(["doctor", "--ci", "--repo", str(tmp_path)])
+    line = next(l for l in capsys.readouterr().out.splitlines() if "Claude credentials" in l)
+    assert line.startswith("OK") and "CLAUDE_CODE_OAUTH_TOKEN" in line and "subscription" in line

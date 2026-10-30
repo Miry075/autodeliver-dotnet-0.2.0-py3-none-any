@@ -274,3 +274,42 @@ def test_every_prompt_renders_with_the_variables_the_pipeline_passes(tmp_path, c
         assert "{{" not in text, role
         if role in ("developer", "reviewer", "planner"):
             assert "Design standards" in text
+
+
+# --- v0.3.0: generated text that leaves the run record is PHI-checked like the commit message ----------
+def test_pr_text_flagged_by_phi_scanner_is_withheld(tmp_path, cfg):
+    from conftest import make_niss
+    niss = make_niss("850101123")
+
+    class Leaky(FakeAgents):
+        def run(self, role, *a, **k):
+            r = super().run(role, *a, **k)
+            if role == "pr_writer":
+                r.output.update(title=f"Fix for patient {niss}", summary_markdown=f"Reproduced with NISS {niss}.")
+            return r
+    repo = make_repo(tmp_path, with_origin=True)
+    ado = OfflineAzureDevOps(STORY)
+    p = Pipeline(cfg, repo, 4242, ado, Leaky(repo), dry_run=False, dotnet_factory=lambda: FakeDotnet(repo))
+    assert p.run() == 0
+    pr = ado.writes[0][1]
+    assert niss not in pr["title"] and niss not in pr["description"]
+    assert pr["title"] == "AB#4242: implement work item 4242" and "Summary withheld" in pr["description"]
+
+
+def test_escalation_comment_withholds_flagged_questions(tmp_path, cfg):
+    from conftest import make_niss
+    niss = make_niss("900202456")
+
+    class Blocked(FakeAgents):
+        def run(self, role, *a, **k):
+            r = super().run(role, *a, **k)
+            if role == "developer":
+                r.output.update(status="blocked", questions=[f"Which record is {niss}?", "Is the guard per episode?"])
+            return r
+    repo = make_repo(tmp_path)
+    ado = OfflineAzureDevOps(STORY)
+    p = Pipeline(cfg, repo, 4242, ado, Blocked(repo), dry_run=True, dotnet_factory=lambda: FakeDotnet(repo))
+    assert p.run() == 2
+    comment = ado.writes[0][1]
+    assert niss not in comment and "withheld" in comment and "Is the guard per episode?" in comment
+    assert niss in (repo / ".work/autodeliver/4242/escalation.md").read_text()     # full text kept in the run record

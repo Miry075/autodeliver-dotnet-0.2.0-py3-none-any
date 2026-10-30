@@ -26,7 +26,7 @@ The `.claude/notes/<id>.md` file `azure-workitem-flow` resumes from is written t
 
 ```bash
 # in a virtual environment
-pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.2.0"
+pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.3.0"
 autodeliver --version
 ```
 
@@ -41,18 +41,32 @@ autodeliver tools install   # Stryker, gitleaks (checksum-verified), sonarscanne
 autodeliver doctor          # every line must be OK
 ```
 
-Then do the Azure DevOps side once: pipeline, variable group `autodeliver-secrets` with `ANTHROPIC_API_KEY`, build identity permissions (no policy bypass), and branch policy with a required human reviewer. The step-by-step list is in [`skill/autodeliver-dotnet/references/setup.md`](skill/autodeliver-dotnet/references/setup.md).
+Then do the Azure DevOps side once: pipeline, variable group `autodeliver-secrets` with one Claude credential (see below), build identity permissions (no policy bypass), and branch policy with a required human reviewer. The step-by-step list is in [`skill/autodeliver-dotnet/references/setup.md`](skill/autodeliver-dotnet/references/setup.md).
 
 ## Use
 
 | | |
 |---|---|
 | Pipeline | Queue `.azuredevops/autodeliver.yml` with `workItemId`, or let the weekday schedule take the oldest ticket tagged `auto-deliver` |
-| Local dry run (reads ADO, writes nothing) | `autodeliver run --work-item 12345 --dry-run` (needs `AZURE_DEVOPS_PAT`, `ANTHROPIC_API_KEY`) |
+| Local dry run (reads ADO, writes nothing) | `autodeliver run --work-item 12345 --dry-run` (needs `AZURE_DEVOPS_PAT`; Claude login, see below) |
 | Offline dry run | `autodeliver run --work-item 1 --dry-run --story-file story.json` |
 | Merged config | `autodeliver config show` |
 
 Run records (state, gate reports, agent outputs, transcripts, evidence pack) are in `.work/autodeliver/<id>/` and are published as the pipeline artifact.
+
+## Claude credentials
+
+The agents run through the Claude Agent SDK, which uses the Claude Code CLI. It logs in one of three ways (`autodeliver doctor` shows which one a run will use):
+
+| Credential | Billing | Use it for |
+|---|---|---|
+| Neither variable set: the Claude Code login on this machine (`claude`, then `/login`) | Your Pro/Max subscription | Local runs on your own repositories |
+| `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` (valid one year) | Your Pro/Max subscription | A pipeline on your own repositories and tickets |
+| `ANTHROPIC_API_KEY` from the Claude Console | Per token | Any shared, team or company pipeline |
+
+Subscription limits assume ordinary individual use. Anthropic's terms require API keys for products and services built on the Agent SDK, and do not allow routing other people's work through a Pro/Max login, so a pipeline that delivers your colleagues' tickets needs an API key (or the organisation's own plan). One run is 8 or more agent sessions, with Opus for planning and review; on Pro you will reach the session limit quickly, Max is more realistic.
+
+If both variables are set the CLI uses the API key. An undefined pipeline variable arrives as the literal `$(NAME)`; autodeliver removes it so it is never tried as a credential.
 
 ## Configuration
 
@@ -89,5 +103,5 @@ The package ships safe defaults (`src/autodeliver/defaults/config.yml`). A repos
   - `.git/` and secrets files cannot be read;
   - shell access is `dotnet build/test/restore` and read-only `git` only.
 - Build and test processes (which run agent-written code) get no pipeline secrets. The git token is passed per command and never stored in `.git/config`.
-- The Claude CLI needs `ANTHROPIC_API_KEY` in its own environment. Restrict the build agent's network egress to contain that.
+- The Claude CLI needs its credential (API key or subscription token) in its own environment. Restrict the build agent's network egress to contain that.
 - The PHI scanner is pattern-based plus gitleaks. It complements the reviewer's health sweep and the human PR review; it does not replace them.

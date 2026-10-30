@@ -5,7 +5,7 @@
 #       - repository: autodeliver
 #         type: git
 #         name: <Project>/autodeliver-dotnet
-#         ref: refs/tags/v0.2.0
+#         ref: refs/tags/v0.3.0
 #   jobs:
 #     - template: azure-pipelines/templates/autodeliver-job.yml@autodeliver
 #       parameters: { workItemId: ..., dryRun: ... }
@@ -28,7 +28,7 @@ parameters:
     default: autodeliver               # alias of the tool repository resource in the consumer pipeline
   - name: variableGroup
     type: string
-    default: autodeliver-secrets       # ANTHROPIC_API_KEY, optional SONAR_TOKEN
+    default: autodeliver-secrets       # CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, optional SONAR_TOKEN
   - name: pythonVersion
     type: string
     default: "3.12"
@@ -99,6 +99,9 @@ jobs:
         displayName: Doctor
         env:
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          # Define ONE Claude credential in the variable group. An undefined one arrives as the literal
+          # "$(NAME)" and autodeliver drops it. If both are defined, the API key wins.
+          CLAUDE_CODE_OAUTH_TOKEN: $(CLAUDE_CODE_OAUTH_TOKEN)
           ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
           SONAR_TOKEN: $(SONAR_TOKEN)
 
@@ -116,6 +119,9 @@ jobs:
         displayName: Run autodeliver
         env:
           SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          # Define ONE Claude credential in the variable group. An undefined one arrives as the literal
+          # "$(NAME)" and autodeliver drops it. If both are defined, the API key wins.
+          CLAUDE_CODE_OAUTH_TOKEN: $(CLAUDE_CODE_OAUTH_TOKEN)
           ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
           SONAR_TOKEN: $(SONAR_TOKEN)
           PYTHONUTF8: "1"

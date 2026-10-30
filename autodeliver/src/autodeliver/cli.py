@@ -22,7 +22,7 @@ from pathlib import Path
 
 import yaml
 
-from . import __version__
+from . import __version__, auth
 from .config import OVERLAY_PATH, ConfigError, load_config, warnings
 from .repo_info import detect
 
@@ -59,15 +59,15 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("note     origin is not an Azure DevOps remote: fill in azure_devops.* in .autodeliver/config.yml")
     print("\nNext:\n  1. Review and commit " + (", ".join(written) or "the files above") +
           "\n  2. In Azure DevOps: create pipeline from .azuredevops/autodeliver.yml, variable group 'autodeliver-secrets'"
-          " (ANTHROPIC_API_KEY), build identity permissions (see README)\n  3. autodeliver doctor")
+          " (CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`, or ANTHROPIC_API_KEY for a shared/company pipeline),"
+          " build identity permissions (see README)\n  3. autodeliver doctor")
     return 0
 
 
 # --- doctor ----------------------------------------------------------------------------------------
 def _secret(name: str) -> bool:
     """Set and not an unexpanded Azure Pipelines macro such as '$(ANTHROPIC_API_KEY)'."""
-    value = os.environ.get(name, "")
-    return bool(value) and not (value.startswith("$(") and value.endswith(")"))
+    return auth.is_set(os.environ.get(name, ""))
 
 
 def _version(cmd: list[str]) -> str | None:
@@ -112,7 +112,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if cfg["phi"].get("gitleaks"):
             found = find_gitleaks(cfg)
             ok("gitleaks", bool(found), found or "autodeliver tools install")
-    ok("ANTHROPIC_API_KEY", _secret("ANTHROPIC_API_KEY") or not args.ci, "secret variable (required in CI)")
+    claude_mode = auth.mode()
+    if args.ci:
+        ok("Claude credentials", claude_mode != "saved_login",
+           f"{auth.DESCRIPTION[claude_mode]}" if claude_mode != "saved_login"
+           else f"set {auth.OAUTH_TOKEN} (subscription) or {auth.API_KEY} as a secret variable")
+    else:
+        ok("Claude credentials", True, auth.DESCRIPTION[claude_mode])
+    if claude_mode == "api_key" and _secret(auth.OAUTH_TOKEN):
+        checks.append(("Claude credentials", True, f"both are set: the CLI uses {auth.API_KEY}, not your subscription"))
     has_token = _secret("SYSTEM_ACCESSTOKEN") or _secret("AZURE_DEVOPS_PAT")
     ok("Azure DevOps token", has_token or not args.ci, "SYSTEM_ACCESSTOKEN (pipeline) or AZURE_DEVOPS_PAT (local)")
     tests_ok, detail = _test_stack(repo)
@@ -271,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    auth.drop_unexpanded()          # "$(CLAUDE_CODE_OAUTH_TOKEN)" from an undefined pipeline variable is not a credential
     try:
         return int(args.func(args))
     except ConfigError as e:

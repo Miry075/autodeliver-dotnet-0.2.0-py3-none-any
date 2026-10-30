@@ -11,8 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-SECRET_ENV = {"SYSTEM_ACCESSTOKEN", "AZURE_DEVOPS_PAT", "ANTHROPIC_API_KEY", "SONAR_TOKEN",
-              "AZURE_DEVOPS_EXT_PAT", "VSS_NUGET_ACCESSTOKEN"}
+# Never passed to processes that run repository or agent-written code (build, test, Stryker, Sonar).
+SECRET_ENV = {"SYSTEM_ACCESSTOKEN", "AZURE_DEVOPS_PAT", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN",
+              "ANTHROPIC_AUTH_TOKEN", "SONAR_TOKEN", "AZURE_DEVOPS_EXT_PAT", "VSS_NUGET_ACCESSTOKEN"}
 
 
 @dataclass
@@ -25,6 +26,7 @@ class BuildResult:
 
 @dataclass
 class TestResult:
+    __test__ = False           # not a pytest test class
     ok: bool
     total: int = 0
     executed: int = 0

@@ -15,6 +15,10 @@ pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git
 
 Use a virtual environment (Windows: `py -m venv .venv` then `.venv\Scripts\activate`; Linux/macOS: `python3 -m venv .venv` then `. .venv/bin/activate`). Python 3.10 or later. Ask the user for the org, project and tag if you don't know them. Never guess a tag.
 
+## Claude credentials
+
+No variable set: the Claude Code login on this machine (the user's subscription; `claude` then `/login`). `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`: subscription, for a pipeline on the user's own repos and tickets. `ANTHROPIC_API_KEY`: required for any shared or company pipeline (Anthropic's terms). If both are set, the API key wins. `autodeliver doctor` reports which one is used.
+
 ## Set up a repository
 
 1. `autodeliver init` in the repo root. It detects org, project, repository and default branch from `origin` and writes `.autodeliver/config.yml` (a small overlay) and `.azuredevops/autodeliver.yml` (a pipeline using the shared job template pinned to this version).

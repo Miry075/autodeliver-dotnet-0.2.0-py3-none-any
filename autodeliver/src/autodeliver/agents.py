@@ -11,11 +11,13 @@ import asyncio
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
 
+from .dotnet import SECRET_ENV
 from .globs import match_any, norm, same_path
 
 READ_TOOLS = ("Read", "Grep", "Glob")
@@ -23,6 +25,36 @@ WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 NEVER_READ = [".git/**", ".work/**", "**/*.pfx", "**/*.snk", "**/.env", "**/secrets*.json", "**/*.user"]
 _SHELL_META = re.compile(r"[;&`$<>\n\r]|\|\|")
 _QUOTED = re.compile(r'"[^"]*"|\'[^\']*\'')
+GIT_FORBIDDEN_OPTIONS = {"--output", "--no-index", "--ext-diff", "--textconv", "--output-directory"}
+_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+_GIT_REV_PATH = re.compile(r"^[^:/\\]+:(?![\\/])(.+)$")       # HEAD:path, abc123:path (not C:\ or a URL)
+# The agent's own shell (and the code `dotnet test` runs in it) gets none of these. The Claude credential
+# in use (API key or subscription token) is the exception: the Claude CLI needs it, so that residual
+# exposure is contained by network egress rules on the build agent.
+AGENT_BLANKED_ENV = sorted(SECRET_ENV - {"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"})
+
+
+def _looks_like_path(value: str) -> bool:
+    return bool(value) and (value.startswith(("/", "\\", "~")) or _DRIVE.match(value) is not None
+                            or ".." in value.replace("\\", "/").split("/")
+                            or value.startswith(".") and len(value) > 1)
+
+
+def _path_values(token: str) -> list[tuple[str, bool]]:
+    """Values inside one argument that may name a file: the token itself, `opt=value`, `a;b=c` and git
+    `rev:path`. Each comes with whether it looks like a path (then it must resolve inside the repository).
+    Every value is matched against NEVER_READ, path-like or not (`git diff -- secrets.json`)."""
+    part = token.split("=", 1)[1] if token.startswith("-") and "=" in token else token
+    if part.startswith("-"):
+        return []
+    values: list[tuple[str, bool]] = []
+    for piece in part.split(";"):
+        piece = piece.split("=", 1)[1] if "=" in piece else piece
+        m = _GIT_REV_PATH.match(piece)
+        value = m.group(1) if m else piece
+        if value:
+            values.append((value, _looks_like_path(value)))
+    return values
 
 
 @dataclass
@@ -66,8 +98,35 @@ class ToolPolicy:
             return None
         return norm(rel)
 
+    def _check_arguments(self, cmd: str) -> tuple[bool, str]:
+        """The allowlist regexes accept any argument; these are the arguments that would escape the policy.
+
+        git: options that write a file (--output), read outside the repository (--no-index) or run
+        configured programs (--ext-diff, --textconv). Every command: a path-like value (including the
+        right-hand side of `opt=value`, `;`-separated logger settings and git `rev:path`) must stay
+        inside the repository and outside NEVER_READ, so `dotnet build -o /tmp/x`,
+        `dotnet test --logger "trx;LogFilePath=/home/x"` and `git show HEAD:.env` are refused.
+        """
+        try:
+            tokens = shlex.split(cmd, posix=True)
+        except ValueError:
+            return False, "could not parse the command"
+        if tokens and tokens[0] == "git":
+            for t in tokens[1:]:
+                name = t.split("=", 1)[0]
+                if name in GIT_FORBIDDEN_OPTIONS or (name.startswith("-O") and not name.startswith("--")):
+                    return False, f"git option {name} is not allowed in this pipeline"
+        for t in tokens[1:]:
+            for value, path_like in _path_values(t):
+                rel = self._rel(value) if path_like else norm(value)
+                if rel is None:
+                    return False, f"{value} is outside the repository"
+                if rel and match_any(rel, NEVER_READ):
+                    return False, f"{rel} is not readable in this pipeline"
+        return True, "ok"
+
     def decide(self, tool: str, data: dict[str, Any]) -> tuple[bool, str]:
-        if tool in READ_TOOLS:
+        if tool in ("Read", "Glob"):
             rel = self._rel(data.get("file_path") or data.get("path"))
             if rel is None:
                 return False, "reads are limited to the repository"
@@ -90,9 +149,21 @@ class ToolPolicy:
             unquoted = _QUOTED.sub("", cmd)
             if _SHELL_META.search(unquoted) or "|" in unquoted:
                 return False, "shell operators are not allowed; run one command at a time"
-            if any(re.fullmatch(rx, cmd) for rx in self.bash_allow):
-                return True, "ok"
-            return False, f"command not allowed; allowed patterns: {self.bash_allow}"
+            if not any(re.fullmatch(rx, cmd) for rx in self.bash_allow):
+                return False, f"command not allowed; allowed patterns: {self.bash_allow}"
+            return self._check_arguments(cmd)
+        if tool == "Grep":
+            rel = self._rel(data.get("path"))
+            if rel is None:
+                return False, "reads are limited to the repository"
+            if rel and match_any(rel, NEVER_READ):
+                return False, f"{rel} is not readable in this pipeline"
+            # A directory search with content output would print lines of NEVER_READ files. File names and
+            # counts are fine; to see lines, search a single file (whose path is checked above).
+            searches_dir = not rel or (self.repo / rel).is_dir()
+            if searches_dir and data.get("output_mode") == "content":
+                return False, "content search is limited to a single file; search the directory for file names first"
+            return True, "ok"
         if tool == "TodoWrite":
             return True, "ok"
         return False, f"tool {tool} is not available in this pipeline"
@@ -211,10 +282,10 @@ class AgentRunner:
             output_format={"type": "json_schema", "schema": self.schema(role)},
             max_turns=int(self.cfg["budget"]["max_turns"][model_key]),
             max_budget_usd=max(0.5, budget_usd),
-            # Blank pipeline secrets for the agent's own shell. ANTHROPIC_API_KEY must stay for the CLI;
+            # Blank pipeline secrets for the agent's own shell. The Claude credential must stay for the CLI;
             # contain that residual exposure with network egress rules on the build agent.
             env={**{k: str(v) for k, v in self.cfg["dotnet"].get("env", {}).items()},
-                 **{k: "" for k in ("SYSTEM_ACCESSTOKEN", "AZURE_DEVOPS_PAT", "SONAR_TOKEN", "AZURE_DEVOPS_EXT_PAT")}},
+                 **{k: "" for k in AGENT_BLANKED_ENV}},
         )
         prompt = self.prompt(role, variables)
         self.transcripts_dir.mkdir(parents=True, exist_ok=True)
