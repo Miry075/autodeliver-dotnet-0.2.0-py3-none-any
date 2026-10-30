@@ -540,3 +540,95 @@ def test_probe_output_shows_the_start_of_a_long_failure():
     shown = _head_tail(out)
     assert shown.startswith("error: Unknown option") and shown.endswith("Exit code: 5") and "[...]" in shown
     assert _head_tail("short") == "short"
+
+
+# --- v0.3.3: a real run from a terminal must be asked for; a missing token is a message, not a traceback ---
+def test_real_run_from_a_terminal_needs_yes(tmp_path, monkeypatch, capsys):
+    from autodeliver.cli import main
+    monkeypatch.delenv("TF_BUILD", raising=False)
+    monkeypatch.delenv("AZURE_DEVOPS_PAT", raising=False)
+    monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+    assert main(["run", "--work-item", "179", "--repo", str(tmp_path)]) == 3
+    err = capsys.readouterr().err
+    assert "REAL run" in err and "--dry-run" in err and "--yes" in err
+
+
+def test_dry_run_and_pipeline_runs_are_not_blocked_by_the_guard(tmp_path, monkeypatch, capsys):
+    from autodeliver.cli import main
+    monkeypatch.delenv("AZURE_DEVOPS_PAT", raising=False)
+    monkeypatch.delenv("SYSTEM_ACCESSTOKEN", raising=False)
+    monkeypatch.delenv("TF_BUILD", raising=False)
+    (tmp_path / ".autodeliver").mkdir()
+    (tmp_path / ".autodeliver" / "config.yml").write_text(
+        "azure_devops:\n  organization_url: https://dev.azure.com/o\n  project: p\n  repository: r\n")
+    assert main(["run", "--work-item", "179", "--dry-run", "--repo", str(tmp_path)]) == 3     # reaches the token check
+    err = capsys.readouterr().err
+    assert "AZURE_DEVOPS_PAT" in err and "Work Items: Read" in err and "REAL run" not in err and "Traceback" not in err
+    monkeypatch.setenv("TF_BUILD", "True")                                                      # inside Azure Pipelines
+    assert main(["run", "--work-item", "179", "--repo", str(tmp_path)]) == 3
+    assert "REAL run" not in capsys.readouterr().err
+
+
+# --- v0.4.0: acceptance criteria written in the Description (Azure DevOps Basic process) ----------------
+ISSUE_MD = ("**User story:** As the platform, I want to send through an access point hidden behind an interface so I can switch provider\n\n"
+            "**Acceptance criteria:** Given a validated invoice, when sent via the sandbox, then a transmission id is stored. "
+            "Core has no reference to the provider SDK.\n\n"
+            "**Priority:** Must · **Planned:** WE2 · Spec: docs/spec.md")
+
+
+def _lis(ul: str) -> list[str]:
+    import re
+    return re.findall(r"<li>(.*?)</li>", ul)
+
+
+def test_criteria_from_a_markdown_description_paragraph():
+    from autodeliver.ado import criteria_from_description
+    assert _lis(criteria_from_description(ISSUE_MD, "Acceptance criteria")) == [
+        "Given a validated invoice, when sent via the sandbox, then a transmission id is stored.",
+        "Core has no reference to the provider SDK."]
+    assert criteria_from_description(ISSUE_MD, "Definition of done") == ""
+    assert criteria_from_description(ISSUE_MD, "") == ""
+
+
+def test_criteria_from_html_bullets_headings_and_numbered_lists():
+    from autodeliver.ado import criteria_from_description
+    html_desc = ("<div><b>Acceptance criteria:</b></div><ul><li>An empty name is rejected</li>"
+                 "<li>A valid name is stored &amp; returned</li></ul><div><b>Priority:</b> Must</div>")
+    assert _lis(criteria_from_description(html_desc, "acceptance criteria")) == ["An empty name is rejected", "A valid name is stored &amp; returned"]
+    md = "Intro\n\n## Acceptance criteria\n1. First rule holds\n2. Second rule holds,\n   continued here\n\n**Notes:** not a criterion"
+    assert _lis(criteria_from_description(md, "Acceptance criteria")) == ["First rule holds", "Second rule holds, continued here"]
+    one_per_line = "**Acceptance criteria:**\nOrders over 100 are free of delivery fees\nOrders under 100 pay the fee\n**Priority:** 1"
+    assert _lis(criteria_from_description(one_per_line, "Acceptance criteria")) == [
+        "Orders over 100 are free of delivery fees", "Orders under 100 pay the fee"]
+
+
+def test_description_criteria_reach_the_pipeline_only_when_configured_and_the_field_is_empty():
+    from autodeliver.ado import OfflineAzureDevOps
+    story = {"title": "F09", "description": ISSUE_MD, "tags": ["auto-deliver"], "type": "Issue", "state": "To Do"}
+    off = OfflineAzureDevOps(story).get_work_item(1)
+    assert off.acceptance_html == "" and off.criteria_source == "the Acceptance Criteria field"
+    on = OfflineAzureDevOps(story, "Acceptance criteria").get_work_item(1)
+    assert len(_lis(on.acceptance_html)) == 2 and "'Acceptance criteria' section of the Description" in on.criteria_source
+    both = OfflineAzureDevOps({**story, "acceptance_criteria": ["The field wins when it has content"]}, "Acceptance criteria").get_work_item(1)
+    assert _lis(both.acceptance_html) == ["The field wins when it has content"] and both.criteria_source.endswith("field")
+
+
+def test_azure_devops_reader_takes_criteria_from_the_description(monkeypatch, cfg):
+    import copy
+    from autodeliver.ado import AzureDevOps
+
+    class Resp:
+        status_code, content = 200, b"{}"
+        def __init__(self, data): self._d = data
+        def json(self): return self._d
+    cfg = copy.deepcopy(cfg)
+    cfg["azure_devops"]["criteria_section"] = "Acceptance criteria"
+    monkeypatch.setenv("AZURE_DEVOPS_PAT", "x")
+    ado = AzureDevOps(cfg)
+    fields = {"System.WorkItemType": "Issue", "System.State": "To Do", "System.Title": "F09 Access point adapter",
+              "System.Description": ISSUE_MD, "System.Tags": "F09; auto-deliver"}
+    ado.session.get = lambda url, **k: Resp({"comments": []} if "comments" in url else {"fields": fields, "relations": []})
+    wi = ado.get_work_item(138)
+    assert len(_lis(wi.acceptance_html)) == 2 and "section of the Description" in wi.criteria_source
+    cfg["azure_devops"]["criteria_section"] = ""
+    assert AzureDevOps(cfg).criteria_section == ""

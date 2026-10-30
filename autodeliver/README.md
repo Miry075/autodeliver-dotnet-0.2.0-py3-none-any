@@ -36,7 +36,7 @@ Manually, or in a pipeline:
 
 ```bash
 # in a virtual environment
-pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.3.2"
+pip install "autodeliver-dotnet @ git+https://dev.azure.com/<org>/<project>/_git/autodeliver-dotnet@v0.4.0"
 autodeliver --version
 ```
 
@@ -58,6 +58,7 @@ Then do the Azure DevOps side once: pipeline, variable group `autodeliver-secret
 | | |
 |---|---|
 | Pipeline | Queue `.azuredevops/autodeliver.yml` with `workItemId`, or let the weekday schedule take the oldest ticket tagged `auto-deliver` |
+| Real run from a terminal (pushes, opens a draft PR, writes to the ticket) | `autodeliver run --work-item 12345 --yes`; without `--yes` it refuses. In a pipeline no flag is needed |
 | Local dry run (reads ADO, writes nothing) | `autodeliver run --work-item 12345 --dry-run` (needs `AZURE_DEVOPS_PAT`; Claude login, see below) |
 | Offline dry run | `autodeliver run --work-item 1 --dry-run --story-file story.json` |
 | Merged config | `autodeliver config show` |
@@ -77,6 +78,24 @@ The agents run through the Claude Agent SDK, which uses the Claude Code CLI. It 
 Subscription limits assume ordinary individual use. Anthropic's terms require API keys for products and services built on the Agent SDK, and do not allow routing other people's work through a Pro/Max login, so a pipeline that delivers your colleagues' tickets needs an API key (or the organisation's own plan). One run is 8 or more agent sessions, with Opus for planning and review; on Pro you will reach the session limit quickly, Max is more realistic.
 
 If both variables are set the CLI uses the API key. An undefined pipeline variable arrives as the literal `$(NAME)`; autodeliver removes it so it is never tried as a credential.
+
+## Azure DevOps process templates
+
+The defaults fit projects with an **Acceptance Criteria** field (Agile and similar). The **Basic** process has only Epic, Issue and Task, the states To Do / Doing / Done, and no such field. For it, write the criteria in the Description under a label and run:
+
+```bash
+autodeliver init --process basic --force      # rewrites .autodeliver/config.yml and the pipeline file
+```
+
+This sets `azure_devops.criteria_section: Acceptance criteria`, allows the types `Issue` and `Task` in the states `To Do` and `Doing`, and moves the item to `Doing` (never `Done`) after the draft PR. The section starts at a line beginning with the label, plain, **bold** or as a heading, and runs to the next bold label or heading:
+
+```markdown
+**Acceptance criteria:**
+- An invoice with an empty buyer VAT number fails validation
+- A valid invoice still passes validation
+```
+
+Bullets or numbered lines are one criterion each; without bullets each line is one; a single paragraph is split into sentences (write bullets when a sentence contains abbreviations such as "e.g."). A filled Acceptance Criteria field always wins over the section.
 
 ## Test runners
 

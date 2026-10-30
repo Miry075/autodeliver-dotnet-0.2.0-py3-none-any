@@ -160,7 +160,7 @@ class FakeAgents:
 
 def run_pipeline(tmp_path: Path, cfg, behaviour="good", *, dry_run=True, with_origin=False, checker_ac1="existing", story=None):
     repo = make_repo(tmp_path, with_origin)
-    ado = OfflineAzureDevOps(story or STORY)
+    ado = OfflineAzureDevOps(story or STORY, cfg["azure_devops"].get("criteria_section", ""))    # as the CLI does
     agents = FakeAgents(repo, behaviour, checker_ac1)
     p = Pipeline(cfg, repo, 4242, ado, agents, dry_run=dry_run, dotnet_factory=lambda: FakeDotnet(repo))
     return p, p.run(), repo, ado, agents
@@ -328,3 +328,30 @@ def test_pipeline_runs_in_a_linked_git_worktree(tmp_path, cfg):
     assert p.run() == 0, (wt / ".work/autodeliver/4242/escalation.md").read_text()
     assert git(wt, "log", "--format=%s", "-1").startswith("feat: refuse edits on closed episodes (AB#4242)")
     assert (main / "src" / "Care" / "Episode.cs").read_text() == "// unfinished local edit\n"    # untouched
+
+
+def test_basic_process_issue_with_criteria_in_the_description_end_to_end(tmp_path, cfg):
+    """Azure DevOps Basic: Issue / Task, states To Do / Doing / Done, no Acceptance Criteria field."""
+    cfg["azure_devops"]["criteria_section"] = "Acceptance criteria"
+    cfg["eligibility"]["work_item_types"] = ["Issue", "Task"]
+    cfg["eligibility"]["allowed_states"] = ["To Do", "Doing"]
+    cfg["on_success"]["dev_done_states"] = ["Doing"]
+    story = {"title": "Refuse edits on closed episodes", "type": "Issue", "state": "To Do", "tags": ["auto-deliver"],
+             "description": ("**User story:** As a clinician I want closed episodes read-only.\n\n"
+                             "**Acceptance criteria:** Editing an open episode succeeds and stores the note. "
+                             "Editing a closed episode is refused with a domain error.\n\n**Priority:** Must"),
+             "type_states": ["To Do", "Doing", "Done"]}
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, dry_run=False, with_origin=True, story=story)
+    assert code == 0, (repo / ".work/autodeliver/4242/escalation.md").read_text() if code else ""
+    assert [a["id"] for a in p.state.acs] == ["AC-1", "AC-2"]
+    assert "'Acceptance criteria' section of the Description" in agents.variables["triage"]["criteria_source"]
+    fields = [w[1] for w in ado.writes if w[0] == "fields"][0]
+    assert fields["System.State"] == "Doing"                                      # never Done: a human completes it
+
+
+def test_basic_process_is_still_rejected_with_the_defaults(tmp_path, cfg):
+    story = {"title": "t", "type": "Issue", "state": "To Do", "tags": ["auto-deliver"],
+             "description": "**Acceptance criteria:** Something that must hold for users."}
+    p, code, repo, ado, agents = run_pipeline(tmp_path, cfg, story=story)
+    text = (repo / ".work/autodeliver/4242/escalation.md").read_text()
+    assert code == 2 and "type 'Issue'" in text and "state 'To Do'" in text and "no usable acceptance criteria" in text

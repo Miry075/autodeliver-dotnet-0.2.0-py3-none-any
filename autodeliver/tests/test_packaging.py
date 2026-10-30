@@ -210,3 +210,25 @@ def test_policy_blocks_symlink_escape(tmp_path):
     p = ToolPolicy(repo, write_paths=["src/link/x.cs"])
     assert not p.decide("Write", {"file_path": str(repo / "src" / "link" / "x.cs")})[0]
     assert not p.decide("Read", {"file_path": str(repo / "src" / "link" / "secret")})[0]
+
+
+def test_init_process_basic_writes_a_valid_overlay_that_keeps_the_azure_devops_block(tmp_path, capsys):
+    import subprocess
+    from autodeliver.cli import main
+    from autodeliver.config import load_config
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "https://org@dev.azure.com/org/Proj/_git/Repo"], check=True)
+    assert main(["init", "--process", "basic", "--repo", str(repo)]) == 0
+    text = (repo / ".autodeliver" / "config.yml").read_text()
+    assert text.count("\nazure_devops:") + text.startswith("azure_devops:") == 1          # no duplicate top-level key
+    cfg = load_config(repo, require_remote=True)
+    assert cfg["azure_devops"]["project"] == "Proj" and cfg["azure_devops"]["criteria_section"] == "Acceptance criteria"
+    assert cfg["eligibility"]["work_item_types"] == ["Issue", "Task"] and cfg["eligibility"]["allowed_states"] == ["To Do", "Doing"]
+    assert cfg["on_success"]["dev_done_states"] == ["Doing"] and cfg["eligibility"]["required_tag"] == "auto-deliver"
+    default = tmp_path / "d"
+    default.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(default)], check=True)
+    assert main(["init", "--repo", str(default)]) == 0
+    assert "criteria_section" not in (default / ".autodeliver" / "config.yml").read_text().replace("# ", "").split("dotnet:")[0]

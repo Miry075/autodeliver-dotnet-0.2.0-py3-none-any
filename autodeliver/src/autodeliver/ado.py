@@ -26,6 +26,7 @@ LINK_TYPES = {
     "System.LinkTypes.Hierarchy-Forward": "child",
     "System.LinkTypes.Related": "related",
 }
+ACCEPTANCE_FIELD = "Microsoft.VSTS.Common.AcceptanceCriteria"
 COMPLETED = "Microsoft.VSTS.Scheduling.CompletedWork"
 REMAINING = "Microsoft.VSTS.Scheduling.RemainingWork"
 
@@ -45,6 +46,7 @@ class WorkItem:
     linked: list[dict[str, str]] = field(default_factory=list)  # {id, relation, type, title, state}
     completed_work: float | None = None
     remaining_work: float | None = None
+    criteria_source: str = "the Acceptance Criteria field"      # or "the '<label>' section of the Description"
 
 
 class _ListParser(HTMLParser):
@@ -97,6 +99,61 @@ def extract_criteria(field_html: str, prefix: str = "AC") -> list[dict[str, str]
     return [{"id": f"{prefix}-{n}", "text": text, "source": source} for n, text in enumerate(items, start=1)]
 
 
+_BOLD = r"(?:\*\*|__)"
+_BULLET = re.compile(r"^[ \t]*(?:[-*\u2022]|\d+[.)])[ \t]+(.*)$")
+_SECTION_END = re.compile(r"^[ \t]*(?:#{1,6}[ \t]|\*\*[^*\n]+?\*\*|__[^_\n]+?__)")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])")
+
+
+def _markdownish(raw: str) -> str:
+    """Description as plain Markdown-like text, whether Azure DevOps returned HTML or Markdown."""
+    text = (raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    if re.search(r"<\s*/?\s*(p|div|br|ul|ol|li|strong|b|h[1-6]|span)\b", text, re.I):
+        text = re.sub(r"<\s*(strong|b)\b[^>]*>(.*?)<\s*/\s*\1\s*>", r"**\2**", text, flags=re.I | re.S)
+        text = re.sub(r"<\s*li\b[^>]*>", "\n- ", text, flags=re.I)
+        text = re.sub(r"<\s*/\s*(p|div|li|ul|ol|h[1-6])\s*>|<\s*br\s*/?\s*>", "\n", text, flags=re.I)
+        text = re.sub(r"<\s*(p|div|h[1-6])\b[^>]*>", "\n", text, flags=re.I)
+        text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    return text.replace("\xa0", " ")
+
+
+def criteria_from_description(raw: str, label: str) -> str:
+    """Acceptance criteria written inside the Description, for processes without an Acceptance Criteria
+    field (Azure DevOps Basic: Epic / Issue / Task). Returns `<ul><li>..</li></ul>` so everything downstream
+    treats them like the field. Empty when the section is absent.
+
+    The section starts at a line that begins with the label (plain, **bold**, or a heading) and runs to the
+    next bold label or heading. Inside it: bullets or numbered lines are one criterion each; otherwise each
+    line is one; a single paragraph is split into sentences."""
+    if not label.strip():
+        return ""
+    label_rx = re.compile(rf"^[ \t]*(?:#{{1,6}}[ \t]*)?{_BOLD}?[ \t]*{re.escape(label.strip())}[ \t]*:?[ \t]*{_BOLD}?[ \t]*:?[ \t]*(?P<rest>.*)$",
+                          re.I | re.M)
+    text = _markdownish(raw)
+    m = label_rx.search(text)
+    if not m:
+        return ""
+    block = [m.group("rest")]
+    for line in text[m.end():].split("\n")[1:]:
+        if _SECTION_END.match(line):
+            break
+        block.append(line)
+    lines = [l.strip() for l in block if l.strip()]
+    if any(_BULLET.match(l) for l in lines):
+        items: list[str] = []
+        for l in lines:
+            b = _BULLET.match(l)
+            if b:
+                items.append(b.group(1).strip())
+            elif items:
+                items[-1] += " " + l                      # continuation of the previous bullet
+    elif len(lines) == 1:
+        items = [x.strip() for x in _SENTENCE_END.split(lines[0]) if x.strip()]
+    else:
+        items = lines
+    return "<ul>" + "".join(f"<li>{html.escape(i)}</li>" for i in items) + "</ul>" if items else ""
+
+
 def extract_acceptance_criteria(acceptance_html: str) -> list[dict[str, str]]:
     return extract_criteria(acceptance_html, "AC")
 
@@ -124,6 +181,8 @@ class AzureDevOps:
         self.project = ado["project"]
         self.repository = ado["repository"]
         self.security_field = ado.get("security_criteria_field", "")
+        self.criteria_field = ado.get("acceptance_criteria_field") or ACCEPTANCE_FIELD
+        self.criteria_section = ado.get("criteria_section", "") or ""
         self.session = requests.Session()
         token = os.environ.get("SYSTEM_ACCESSTOKEN")
         pat = os.environ.get("AZURE_DEVOPS_PAT")
@@ -148,7 +207,12 @@ class AzureDevOps:
     def get_work_item(self, wid: int) -> WorkItem:
         data = self._check(self.session.get(self._url(f"wit/workitems/{wid}?$expand=all"), timeout=30))
         f = data["fields"]
-        ac_html = f.get("Microsoft.VSTS.Common.AcceptanceCriteria", "") or ""
+        ac_html = f.get(self.criteria_field, "") or ""
+        description_raw = f.get("System.Description", "") or f.get("Microsoft.VSTS.TCM.ReproSteps", "") or ""
+        source = "the Acceptance Criteria field"
+        if not html_to_text(ac_html).strip() and self.criteria_section:
+            ac_html = criteria_from_description(description_raw, self.criteria_section)
+            source = f"the '{self.criteria_section}' section of the Description"
         return WorkItem(
             id=wid,
             type=f.get("System.WorkItemType", ""),
@@ -163,6 +227,7 @@ class AzureDevOps:
             linked=self._linked(data.get("relations") or []),
             completed_work=_num(f.get(COMPLETED)),
             remaining_work=_num(f.get(REMAINING)),
+            criteria_source=source,
         )
 
     def _comments(self, wid: int) -> list[str]:
@@ -250,8 +315,9 @@ class AzureDevOps:
 class OfflineAzureDevOps:
     """Dry-run / test stand-in: reads a work item from JSON, records every write instead of sending it."""
 
-    def __init__(self, story: dict):
+    def __init__(self, story: dict, criteria_section: str = ""):
         self.story = story
+        self.criteria_section = criteria_section
         self.writes: list[tuple[str, Any]] = []
 
     def get_work_item(self, wid: int) -> WorkItem:
@@ -262,12 +328,17 @@ class OfflineAzureDevOps:
             return f"<ul>{raw}</ul>" if "<li>" in raw and "<ul>" not in raw else raw
 
         ac_html = as_list("acceptance_html", "acceptance_criteria")
+        source = "the Acceptance Criteria field"
+        if not html_to_text(ac_html).strip() and self.criteria_section:
+            ac_html = criteria_from_description(s.get("description", ""), self.criteria_section)
+            source = f"the '{self.criteria_section}' section of the Description"
         return WorkItem(id=wid, type=s.get("type", "User Story"), state=s.get("state", "Active"), title=s["title"],
                         description_text=s.get("description", ""), acceptance_text=html_to_text(ac_html),
                         acceptance_html=ac_html, tags=s.get("tags", []),
                         security_html=as_list("security_html", "security_criteria"),
                         comments=list(s.get("comments", [])), linked=list(s.get("linked", [])),
-                        completed_work=_num(s.get("completed_work")), remaining_work=_num(s.get("remaining_work")))
+                        completed_work=_num(s.get("completed_work")), remaining_work=_num(s.get("remaining_work")),
+                        criteria_source=source)
 
     def type_states(self, work_item_type: str) -> list[str]:
         return list(self.story.get("type_states", ["New", "Active", "Resolved", "Closed"]))

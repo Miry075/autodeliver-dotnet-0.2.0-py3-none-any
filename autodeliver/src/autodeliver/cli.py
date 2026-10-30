@@ -29,6 +29,18 @@ from .repo_info import detect
 
 PIPELINE_PATH = Path(".azuredevops") / "autodeliver.yml"
 
+# `init --process`: what differs from the packaged defaults (written for Agile-like projects with an
+# Acceptance Criteria field). Basic has Epic / Issue / Task, states To Do / Doing / Done and no such field.
+PROCESSES = {
+    "agile": ("", ""),
+    "basic": (
+        "  criteria_section: Acceptance criteria   # no Acceptance Criteria field in Basic: read the criteria from this section of the Description\n",
+        "\n# Azure DevOps Basic process: Issue / Task; states To Do / Doing / Done\n"
+        "eligibility:\n  work_item_types: [Issue, Task]\n  allowed_states: [To Do, Doing]\n"
+        "on_success:\n  dev_done_states: [Doing]               # never Done: a human completes the item\n\n",
+    ),
+}
+
 
 # --- init ------------------------------------------------------------------------------------------
 def cmd_init(args: argparse.Namespace) -> int:
@@ -42,6 +54,8 @@ def cmd_init(args: argparse.Namespace) -> int:
         "project": remote.project if remote else "CHANGE_ME",
         "repository": remote.repository if remote else "CHANGE_ME",
         "target_branch": branch,
+        "process_azure": PROCESSES[args.process][0],
+        "process_blocks": PROCESSES[args.process][1],
         "version": __version__,
         "tool_repo": args.tool_repo or (f"{remote.project}/autodeliver-dotnet" if remote else "CHANGE_ME/autodeliver-dotnet"),
     }
@@ -228,12 +242,28 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.story_file and not args.dry_run:
         print("--story-file is only allowed with --dry-run", file=sys.stderr)
         return 3
+    # A real run pushes a branch, opens a PR and writes to the ticket. In the pipeline that is the point;
+    # from a terminal it must be asked for explicitly (Azure Pipelines always sets TF_BUILD).
+    if not args.dry_run and not os.environ.get("TF_BUILD") and not args.yes:
+        print("autodeliver: this is a REAL run: it pushes a branch, opens a draft PR and writes to the work item.\n"
+              "  To try it safely add --dry-run (reads the ticket, writes nothing, pushes nothing).\n"
+              "  To really run it from this terminal, add --yes.", file=sys.stderr)
+        return 3
     repo = args.repo.resolve()
     cfg = load_config(repo, args.config, require_remote=not offline)
     if offline:
-        ado = OfflineAzureDevOps(json.loads(args.story_file.read_text(encoding="utf-8")))
+        ado = OfflineAzureDevOps(json.loads(args.story_file.read_text(encoding="utf-8")),
+                                 cfg["azure_devops"].get("criteria_section", ""))
     else:
-        live = AzureDevOps(cfg)
+        try:
+            live = AzureDevOps(cfg)
+        except RuntimeError as e:
+            print(f"autodeliver: {e}", file=sys.stderr)
+            if "AZURE_DEVOPS_PAT" in str(e):
+                print('  Local use: create a token with the scope "Work Items: Read" and run\n'
+                      '    read -s "AZURE_DEVOPS_PAT?Paste the token, then press Enter: "; export AZURE_DEVOPS_PAT; echo',
+                      file=sys.stderr)
+            return 3
         ado = _ReadOnly(live) if args.dry_run else live
         if args.next:
             el = cfg["eligibility"]
@@ -284,6 +314,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = with_repo(sub.add_parser("init", help="create .autodeliver/config.yml and the pipeline in a repository"))
     p.add_argument("--tool-repo", help="Azure Repos path of the autodeliver tool repo, PROJECT/REPO")
+    p.add_argument("--process", choices=sorted(PROCESSES), default="agile",
+                   help="Azure DevOps process template: 'basic' (Issue/Task, To Do/Doing/Done, criteria in the Description)")
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_init)
 
@@ -306,6 +338,7 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("--work-item", type=int)
     target.add_argument("--next", action="store_true", help="pick the oldest tagged, unblocked work item")
     p.add_argument("--dry-run", action="store_true", help="no Azure DevOps writes, no push, no PR")
+    p.add_argument("--yes", action="store_true", help="confirm a real (non-dry) run from a terminal; not needed in a pipeline")
     p.add_argument("--story-file", type=Path, help="dry run only: JSON work item instead of Azure DevOps")
     p.add_argument("--config", type=Path, help="overlay file (default: <repo>/.autodeliver/config.yml)")
     p.set_defaults(func=cmd_run)

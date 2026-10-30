@@ -8,6 +8,8 @@ azure_devops:
   repository: CHANGE_ME
   target_branch: main
   security_criteria_field: ""         # empty = auto-detect a field whose name ends with SecurityCriteria
+  acceptance_criteria_field: Microsoft.VSTS.Common.AcceptanceCriteria
+  criteria_section: ""                # Basic process (no such field): label of the section of the Description that holds the criteria, e.g. "Acceptance criteria"
 
 eligibility:
   required_tag: auto-deliver           # opt-in only; nothing runs without this tag

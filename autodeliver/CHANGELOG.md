@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+### Azure DevOps Basic process (Epic / Issue / Task, To Do / Doing / Done, no Acceptance Criteria field)
+- `azure_devops.criteria_section`: when the Acceptance Criteria field is empty or missing, read the criteria from this labelled section of the Description (bullets, numbered lines, lines or sentences). Markdown and HTML descriptions both work. The triage step is told where the criteria came from, so the same text is not flagged as "criteria hiding in the description".
+- `azure_devops.acceptance_criteria_field`: the field to read, for processes that name it differently.
+- `autodeliver init --process basic` writes the matching overlay (types `Issue`/`Task`, states `To Do`/`Doing`, dev-done state `Doing`, never `Done`).
+- A clearer eligibility message names the section as well as the field.
+
+## 0.3.3
+- `autodeliver run` without `--dry-run` now refuses to start from a terminal unless `--yes` is given (a real run pushes a branch, opens a PR and writes to the work item). Azure Pipelines is unaffected: it sets `TF_BUILD`.
+- A missing `AZURE_DEVOPS_PAT` / `SYSTEM_ACCESSTOKEN` prints how to set it instead of a traceback.
+
 ## 0.3.2
 - Microsoft.Testing.Platform: dropped `--nologo` from the test command. The new runner rejects it with exit code 5 ("invalid command line"), which `doctor --probe-tests` caught on a real xunit.v3 solution. Every other option was confirmed accepted there: `--solution`, `-c`, `--no-build`, `--results-directory`, `--filter-trait NAME=VALUE` (a filter that matches nothing exits 8).
 - `doctor --probe-tests` now prints the command and the start of the output when a probe fails.

@@ -133,6 +133,7 @@ class Pipeline:
         wi = self.wi
         return {"work_item_id": str(self.state.work_item_id), "work_item_type": wi.type, "title": wi.title,
                 "description": wi.description_text or "(empty)", "acceptance_criteria": self.state.acs,
+                "criteria_source": wi.criteria_source,
                 "security_criteria": self.state.security or "(none)",
                 "comments": wi.comments or "(none)", "linked": wi.linked or "(none)",
                 "conventions": self._conventions() or ["(none found; follow the surrounding code)"]}
@@ -196,9 +197,12 @@ class Pipeline:
         if self.wi.state not in el["allowed_states"]:
             problems.append(f"state '{self.wi.state}' not in {el['allowed_states']}")
         self.state.acs = extract_criteria(self.wi.acceptance_html, "AC")
+        self.state.log("eligibility", f"{len(self.state.acs)} acceptance criteria read from {self.wi.criteria_source}")
         self.state.security = extract_criteria(self.wi.security_html, "SC")
         if len(self.state.acs) < el["min_acceptance_criteria"]:
-            problems.append("no usable acceptance criteria in the Acceptance Criteria field")
+            section = self.cfg["azure_devops"].get("criteria_section", "")
+            problems.append(f"no usable acceptance criteria in the Acceptance Criteria field"
+                            + (f" or the '{section}' section of the Description" if section else ""))
         if problems:
             raise Escalation("eligibility", "work item is not eligible for autonomous delivery", problems)
 
@@ -247,8 +251,8 @@ class Pipeline:
         for a in out.get("acs", []):
             if not a.get("testable"):
                 questions.append(f"{a['id']} is not testable as written: {a.get('issue', '')}")
-        questions += [f"criterion found in the {x['source']} but not in the Acceptance Criteria field: {x['text']} "
-                      f"(move it into the field, or state it is not required)" for x in out.get("extra_criteria", [])]
+        questions += [f"criterion found in the {x['source']} but not in the acceptance criteria: {x['text']} "
+                      f"(add it to the criteria, or state it is not required)" for x in out.get("extra_criteria", [])]
         questions += [f"{b['question']} ({b.get('why', '')})" for b in out.get("blockers", [])]
         questions += [f"touches restricted area {r['area']}: {r['reason']}" for r in out.get("touches_restricted", [])]
         if out.get("estimated_tasks", 0) > el["max_estimated_tasks"] or len(out.get("estimated_files", [])) > el["max_estimated_files"]:
