@@ -1,0 +1,129 @@
+# Reusable autodeliver job. Consumers reference it from their own pipeline:
+#
+#   resources:
+#     repositories:
+#       - repository: autodeliver
+#         type: git
+#         name: <Project>/autodeliver-dotnet
+#         ref: refs/tags/v0.2.0
+#   jobs:
+#     - template: azure-pipelines/templates/autodeliver-job.yml@autodeliver
+#       parameters: { workItemId: ..., dryRun: ... }
+#
+# `autodeliver init` generates exactly that. Works on Windows and Linux agents (all scripts are pwsh).
+
+parameters:
+  - name: workItemId
+    type: number
+    default: 0                         # 0 = pick the oldest tagged, unblocked work item
+  - name: dryRun
+    type: boolean
+    default: false
+  - name: pool
+    type: object
+    default:
+      vmImage: ubuntu-latest
+  - name: toolRepository
+    type: string
+    default: autodeliver               # alias of the tool repository resource in the consumer pipeline
+  - name: variableGroup
+    type: string
+    default: autodeliver-secrets       # ANTHROPIC_API_KEY, optional SONAR_TOKEN
+  - name: pythonVersion
+    type: string
+    default: "3.12"
+  - name: dotnetVersion
+    type: string
+    default: ""                        # empty = use the repository's global.json
+  - name: timeoutInMinutes
+    type: number
+    default: 180
+
+jobs:
+  - job: autodeliver
+    displayName: autodeliver ${{ parameters.workItemId }}
+    timeoutInMinutes: ${{ parameters.timeoutInMinutes }}
+    pool: ${{ parameters.pool }}
+    variables:
+      - group: ${{ parameters.variableGroup }}
+      - name: ADV_REPO
+        value: $(Pipeline.Workspace)/s/repo
+      - name: ADV_TOOL
+        value: $(Pipeline.Workspace)/s/autodeliver-tool
+    steps:
+      - checkout: self
+        path: s/repo
+        fetchDepth: 0
+        clean: true
+        persistCredentials: false      # the orchestrator passes the token per git command
+      - checkout: ${{ parameters.toolRepository }}
+        path: s/autodeliver-tool       # outside the target repo: never counted as a change
+        fetchDepth: 1
+
+      - ${{ if eq(parameters.dotnetVersion, '') }}:
+          - task: UseDotNet@2
+            displayName: .NET SDK from global.json
+            inputs:
+              useGlobalJson: true
+              workingDirectory: $(ADV_REPO)
+      - ${{ else }}:
+          - task: UseDotNet@2
+            displayName: .NET SDK ${{ parameters.dotnetVersion }}
+            inputs:
+              version: ${{ parameters.dotnetVersion }}
+
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: ${{ parameters.pythonVersion }}
+
+      - pwsh: |
+          $ErrorActionPreference = 'Stop'
+          $venv = Join-Path $env:AGENT_TEMPDIRECTORY 'autodeliver-venv'
+          python -m venv $venv
+          $py = if ($IsWindows) { Join-Path $venv 'Scripts/python.exe' } else { Join-Path $venv 'bin/python' }
+          & $py -m pip install --quiet --disable-pip-version-check "$env:ADV_TOOL"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Write-Host "##vso[task.setvariable variable=ADV_PY]$py"
+          git -C "$env:ADV_REPO" config user.name "autodeliver"
+          git -C "$env:ADV_REPO" config user.email "autodeliver@noreply.invalid"
+        displayName: Install autodeliver
+
+      - pwsh: |
+          & "$env:ADV_PY" -m autodeliver tools install --repo "$env:ADV_REPO"
+          exit $LASTEXITCODE
+        displayName: Install scanners (stryker, gitleaks, sonarscanner)
+
+      - pwsh: |
+          & "$env:ADV_PY" -m autodeliver doctor --ci --repo "$env:ADV_REPO"
+          exit $LASTEXITCODE
+        displayName: Doctor
+        env:
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+          SONAR_TOKEN: $(SONAR_TOKEN)
+
+      - pwsh: |
+          $target = if (${{ parameters.workItemId }} -eq 0) { @('--next') } else { @('--work-item', '${{ parameters.workItemId }}') }
+          $dry = if ('${{ parameters.dryRun }}' -eq 'True') { @('--dry-run') } else { @() }
+          & "$env:ADV_PY" -m autodeliver run @target @dry --repo "$env:ADV_REPO"
+          switch ($LASTEXITCODE) {
+            0 { Write-Host 'Draft PR published (or dry run complete)' }
+            1 { Write-Host 'Nothing eligible' }
+            2 { Write-Host '##vso[task.logissue type=warning]Escalated to a human; see the work item comment' }
+            default { Write-Host '##vso[task.logissue type=error]autodeliver internal error'; exit $LASTEXITCODE }
+          }
+          exit 0
+        displayName: Run autodeliver
+        env:
+          SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+          ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+          SONAR_TOKEN: $(SONAR_TOKEN)
+          PYTHONUTF8: "1"
+
+      - task: PublishPipelineArtifact@1
+        displayName: Publish run record
+        condition: always()
+        continueOnError: true          # nothing to publish when the run stopped before creating it
+        inputs:
+          targetPath: $(ADV_REPO)/.work/autodeliver
+          artifact: autodeliver-$(System.JobAttempt)

@@ -1,0 +1,114 @@
+{
+  "type": "object",
+  "properties": {
+    "acs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "testable": {
+            "type": "boolean"
+          },
+          "restated": {
+            "type": "string"
+          },
+          "issue": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "testable",
+          "restated",
+          "issue"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "extra_criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "description",
+              "additional_section",
+              "comment"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "why"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "estimated_tasks": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "estimated_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "touches_restricted": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "area": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "area",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "acs",
+    "extra_criteria",
+    "blockers",
+    "estimated_tasks",
+    "estimated_files",
+    "touches_restricted"
+  ],
+  "additionalProperties": false
+}

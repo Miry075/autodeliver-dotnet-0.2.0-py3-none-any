@@ -1,0 +1,182 @@
+# autodeliver packaged defaults. Do not edit in a repository: override in .autodeliver/config.yml
+# (`autodeliver init` creates it). Safety lists marked [additive] can be extended, never shortened.
+# Every gate decision is made by code from these values, never by an agent.
+
+azure_devops:
+  organization_url: https://dev.azure.com/CHANGE_ME
+  project: CHANGE_ME
+  repository: CHANGE_ME
+  target_branch: main
+  security_criteria_field: ""         # empty = auto-detect a field whose name ends with SecurityCriteria
+
+eligibility:
+  required_tag: auto-deliver           # opt-in only; nothing runs without this tag
+  work_item_types: [User Story, Bug, Task]
+  allowed_states: [New, Approved, Active, Committed]
+  min_acceptance_criteria: 1
+  max_estimated_tasks: 3
+  max_estimated_files: 12
+
+branch:
+  pattern: "feature/{id}-{slug}"       # team convention: always feature/
+  slug_max_length: 40
+
+commit:
+  message_template: "{type}: {summary} (AB#{id})"
+
+scope:
+  # [additive] Paths an agent may never touch (repo-relative, `**` globs, case-insensitive).
+  deny_paths:
+    - ".autodeliver/**"                # the repo's autodeliver config
+    - ".azuredevops/**"                # pipelines, including the autodeliver pipeline
+    - "**/azure-pipelines*.yml"
+    - ".github/**"
+    - "**/Migrations/**"
+    - "**/*.bicep"
+    - "**/*.tf"
+    - "**/Dockerfile"
+    - "**/appsettings*.json"
+    - "**/*.pfx"
+    - "**/*.snk"
+    - "**/Auth/**"
+    - "**/Authorization/**"
+    - "**/Security/**"
+  # [additive] Any change to these files is a dependency/build change and is blocked.
+  dependency_files:
+    - "**/Directory.Packages.props"
+    - "**/Directory.Build.props"
+    - "**/Directory.Build.targets"
+    - "**/packages.lock.json"
+    - "**/global.json"
+    - "**/nuget.config"
+  # [additive] csproj lines that count as dependency or build-logic changes (MSBuild targets run code).
+  csproj_dependency_patterns:
+    - "<PackageReference"
+    - "<ProjectReference"
+    - "<FrameworkReference"
+    - "<TargetFramework"
+    - "<Target"
+    - "<Exec"
+    - "<UsingTask"
+    - "<Import"
+    - "<PackageVersion"
+  test_path_globs:
+    - "tests/**"
+    - "test/**"
+    - "**/*.Tests/**"
+    - "**/*.UnitTests/**"
+    - "**/*.IntegrationTests/**"
+  max_changed_files: 15
+  max_changed_lines: 400
+
+dotnet:
+  solution: ""                         # empty = the single *.sln / *.slnx at repo root
+  configuration: Release
+  fail_on_new_warnings: true
+  env:
+    DOTNET_CLI_UI_LANGUAGE: en
+    DOTNET_NOLOGO: "1"
+    DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+tests:
+  ac_trait_name: AC                    # [Trait("AC", "AC-1")]
+  min_tests_per_ac: 1
+
+mutation:
+  enabled: true
+  min_score: 60                        # percent, computed by the orchestrator from the JSON report
+  # Argument list (no shell). Placeholders: {solution} {base} {out}
+  args: [dotnet, stryker, --solution, "{solution}", "--since:{base}", --reporter, json, --output, "{out}"]
+  timeout_minutes: 40
+
+phi:
+  gitleaks: true
+  gitleaks_args: [gitleaks, git, --pre-commit, --staged, --redact, --no-banner, --exit-code, "1"]
+  # [additive] Identifiers that must never reach log/exception/telemetry calls (case-insensitive).
+  blocking_identifiers: [niss, inss, ssn, nationalnumber, nationalregisternumber, rijksregisternummer,
+                         registrenational, firstname, lastname, fullname, patientname, birthdate,
+                         dateofbirth, diagnosis, medication, prescription, email, phonenumber, address]
+  warning_identifiers: [patientid, personid, contactid]
+  identifier_allowlist: [ipaddress, remoteipaddress, remoteaddress, baseaddress, macaddress,
+                         hostaddress, serveraddress, emailtemplate, emailsettings]
+  # [additive]
+  sink_patterns:
+    - "\\.Log(Trace|Debug|Information|Warning|Error|Critical)\\s*\\("
+    - "\\.Log\\s*\\("
+    - "Console\\.Write"
+    - "Debug\\.Write"
+    - "Trace\\.Write"
+    - "throw\\s+new\\s+\\w*Exception\\s*\\("
+    - "\\.TrackEvent\\s*\\("
+    - "\\.TrackTrace\\s*\\("
+    - "Activity\\.Current\\?*\\.(SetTag|AddTag)\\s*\\("
+
+sonar:
+  enabled: false
+  host_url: https://sonarcloud.io
+  organization: CHANGE_ME
+  project_key: CHANGE_ME
+  fix_severities: [BLOCKER, CRITICAL, MAJOR]
+  poll_timeout_minutes: 15
+
+# Extra scanners, argument lists (no shell). Non-zero exit = finding. Placeholder: {base}
+security_commands: []
+  # - name: aikido
+  #   args: [aikido-local-scanner, scan, --base, "{base}"]
+
+tools:                                 # used by `autodeliver tools install`
+  gitleaks_version: "8.21.2"
+  stryker_version: ""                  # empty = latest
+  sonarscanner_version: ""
+  install_dir: ""                      # empty = ~/.autodeliver/tools
+
+loops:                                 # hard limits (1-5); exceeding any one escalates
+  plan: 2
+  tests: 2
+  dev: 3
+  review: 2
+  quality: 2
+
+models:                                # planner/plan_checker and developer/reviewer must differ
+  mapper: claude-haiku-5-5             # code map before analysis (locate, not reason)
+  triage: claude-sonnet-5-5
+  planner: claude-opus-5-5
+  plan_checker: claude-sonnet-5-5
+  test_author: claude-sonnet-5-5
+  developer: claude-sonnet-5-5
+  reviewer: claude-opus-5-5
+  pr_writer: claude-haiku-5-5
+
+budget:
+  max_total_usd: 30
+  max_turns:
+    mapper: 30
+    triage: 20
+    planner: 60
+    plan_checker: 40
+    test_author: 80
+    developer: 120
+    reviewer: 50
+    pr_writer: 10
+
+plan_check:
+  min_file_overlap: 0.5
+
+on_escalate:
+  add_tag: autodeliver-blocked
+  set_state: null
+  comment: true
+  push_branch: false                   # invariant: never push code that failed a gate
+
+on_success:
+  add_tag: autodeliver-pr
+  remove_tag: auto-deliver
+  comment: true
+  draft_pr: true                       # invariant
+  write_hours: true                    # add the human-equivalent estimate to Completed Work (cumulative)
+  zero_remaining_work: true
+  max_hours: 40                        # an estimate above this is not written (reported instead)
+  transition: true                     # move to the first dev-done state the work item type has
+  dev_done_states: [Resolved, Code Review, Done]   # never Closed: verification is a human's call
+
+conventions_files: [AGENTS.md, CLAUDE.md, CONTRIBUTING.md]

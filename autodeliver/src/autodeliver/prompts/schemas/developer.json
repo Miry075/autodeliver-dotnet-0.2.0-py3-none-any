@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "test_dispute",
+        "blocked"
+      ]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "test_dispute": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "test": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "test",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "followups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "status",
+    "summary",
+    "test_dispute",
+    "questions",
+    "followups"
+  ],
+  "additionalProperties": false
+}

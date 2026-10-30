@@ -1,0 +1,27 @@
+# autodeliver repository overlay. Only override what this repository needs;
+# everything else comes from the packaged defaults (`autodeliver config show` prints the merged result).
+# Safety lists (scope.deny_paths, scope.dependency_files, phi.blocking_identifiers, ...) are additive:
+# entries here are added to the defaults, never replace them.
+
+azure_devops:
+  organization_url: {organization_url}
+  project: {project}
+  repository: {repository}
+  target_branch: {target_branch}
+
+# dotnet:
+#   solution: MySolution.sln        # only needed when the repo root has several solutions
+
+# scope:
+#   deny_paths:                      # added to the defaults
+#     - "src/Legacy/**"
+#   test_path_globs: ["tests/**"]    # replaces the default list
+
+# sonar:
+#   enabled: true
+#   organization: my-org
+#   project_key: my-org_my-repo
+
+# security_commands:
+#   - name: aikido
+#     args: [aikido-local-scanner, scan, --base, "{{base}}"]

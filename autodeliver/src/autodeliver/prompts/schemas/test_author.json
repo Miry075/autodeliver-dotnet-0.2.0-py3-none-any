@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "done",
+        "blocked"
+      ]
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ac_id": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "test_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ac_id",
+          "file",
+          "test_name"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "notes": {
+      "type": "string"
+    },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "status",
+    "tests",
+    "notes",
+    "questions"
+  ],
+  "additionalProperties": false
+}

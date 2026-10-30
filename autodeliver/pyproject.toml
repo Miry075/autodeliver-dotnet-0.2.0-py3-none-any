@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autodeliver-dotnet"
+dynamic = ["version"]
+description = "Unattended Azure DevOps work item -> gated draft pull request pipeline for .NET repositories (Claude Agent SDK)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Corilus" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "claude-agent-sdk>=0.2.137,<1",
+    "PyYAML>=6.0,<7",
+    "requests>=2.31,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+autodeliver = "autodeliver.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "autodeliver.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autodeliver = ["defaults/*.yml", "prompts/*.md", "prompts/schemas/*.json", "prompts/standards/*.md", "templates/*.tmpl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

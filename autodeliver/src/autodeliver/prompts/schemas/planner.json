@@ -1,0 +1,310 @@
+{
+  "type": "object",
+  "properties": {
+    "ac_baseline": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "existing",
+              "additional",
+              "uncertain"
+            ]
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "at_risk": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ac_id",
+          "kind",
+          "evidence",
+          "at_risk",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "what": {
+      "type": "string"
+    },
+    "why": {
+      "type": "string"
+    },
+    "use_cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^UC-[0-9]+$"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "actor",
+              "edge",
+              "dependent",
+              "related"
+            ]
+          },
+          "in_scope": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "description",
+          "kind",
+          "in_scope",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "trade_off": {
+            "type": "string"
+          },
+          "design_fit": {
+            "type": "string"
+          },
+          "testability": {
+            "type": "string"
+          },
+          "covers_all_use_cases": {
+            "type": "boolean"
+          },
+          "preserves_existing_ac": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "summary",
+          "trade_off",
+          "design_fit",
+          "testability",
+          "covers_all_use_cases",
+          "preserves_existing_ac"
+        ],
+        "additionalProperties": false
+      },
+      "minItems": 1,
+      "maxItems": 3
+    },
+    "chosen_option": {
+      "type": "string"
+    },
+    "chosen_rationale": {
+      "type": "string"
+    },
+    "single_option_reason": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "ac_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "change": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "modify",
+                    "delete"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "change"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "ac_ids",
+          "files"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "test_plan": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "use_case_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^UC-[0-9]+$"
+            }
+          },
+          "test_file": {
+            "type": "string"
+          },
+          "test_name": {
+            "type": "string"
+          },
+          "layer": {
+            "type": "string",
+            "enum": [
+              "domain",
+              "application",
+              "infrastructure",
+              "presentation"
+            ]
+          }
+        },
+        "required": [
+          "ac_id",
+          "use_case_ids",
+          "test_file",
+          "test_name",
+          "layer"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "signature"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "followups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "commit_type": {
+      "type": "string",
+      "enum": [
+        "feat",
+        "fix",
+        "refactor",
+        "perf"
+      ]
+    },
+    "commit_summary": {
+      "type": "string",
+      "maxLength": 72
+    },
+    "commit_why": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "ac_baseline",
+    "what",
+    "why",
+    "use_cases",
+    "options",
+    "chosen_option",
+    "chosen_rationale",
+    "single_option_reason",
+    "summary",
+    "tasks",
+    "test_plan",
+    "contracts",
+    "citations",
+    "assumptions",
+    "followups",
+    "commit_type",
+    "commit_summary",
+    "commit_why"
+  ],
+  "additionalProperties": false
+}

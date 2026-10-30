@@ -1,0 +1,363 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "APPROVE",
+        "CHANGES_REQUESTED"
+      ]
+    },
+    "existing_ac_assessment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "holds": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ac_id",
+          "holds",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ac_assessment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ac_id": {
+            "type": "string",
+            "pattern": "^(AC|SC)-[0-9]+$"
+          },
+          "met": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ac_id",
+          "met",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "use_case_assessment": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "uc_id": {
+            "type": "string",
+            "pattern": "^UC-[0-9]+$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "met",
+              "not_met",
+              "not_verifiable"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uc_id",
+          "status",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "blocker",
+              "major",
+              "minor",
+              "nit"
+            ]
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "issue": {
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "file",
+          "line",
+          "issue",
+          "suggestion"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "health_sweep": {
+      "type": "object",
+      "properties": {
+        "phi_in_logs": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "issue",
+                "not_applicable"
+              ]
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "note"
+          ],
+          "additionalProperties": false
+        },
+        "audit_trail": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "issue",
+                "not_applicable"
+              ]
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "note"
+          ],
+          "additionalProperties": false
+        },
+        "retention": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "issue",
+                "not_applicable"
+              ]
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "note"
+          ],
+          "additionalProperties": false
+        },
+        "data_boundary": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "issue",
+                "not_applicable"
+              ]
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "note"
+          ],
+          "additionalProperties": false
+        },
+        "authz": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "ok",
+                "issue",
+                "not_applicable"
+              ]
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "note"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "phi_in_logs",
+        "audit_trail",
+        "retention",
+        "data_boundary",
+        "authz"
+      ],
+      "additionalProperties": false
+    },
+    "design_principles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "principle": {
+            "type": "string"
+          },
+          "how": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "principle",
+          "how"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "test_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "layer": {
+            "type": "string"
+          },
+          "tests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "item",
+          "layer",
+          "tests"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "untested": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "still_needed": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "effort_estimate": {
+      "type": "object",
+      "properties": {
+        "reading": {
+          "type": "number",
+          "minimum": 0
+        },
+        "implementing": {
+          "type": "number",
+          "minimum": 0
+        },
+        "testing": {
+          "type": "number",
+          "minimum": 0
+        },
+        "self_review": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "reading",
+        "implementing",
+        "testing",
+        "self_review"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "verdict",
+    "existing_ac_assessment",
+    "ac_assessment",
+    "use_case_assessment",
+    "findings",
+    "health_sweep",
+    "design_principles",
+    "test_coverage",
+    "untested",
+    "risks",
+    "still_needed",
+    "effort_estimate"
+  ],
+  "additionalProperties": false
+}

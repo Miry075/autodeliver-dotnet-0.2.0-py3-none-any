@@ -1,0 +1,94 @@
+{
+  "type": "object",
+  "properties": {
+    "ac_classification": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ac_id": {
+            "type": "string",
+            "pattern": "^AC-[0-9]+$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "existing",
+              "additional",
+              "uncertain"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ac_id",
+          "kind",
+          "evidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "change": {
+            "type": "string",
+            "enum": [
+              "create",
+              "modify",
+              "delete"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "change",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "concerns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "why"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "ac_classification",
+    "files",
+    "concerns",
+    "blockers"
+  ],
+  "additionalProperties": false
+}

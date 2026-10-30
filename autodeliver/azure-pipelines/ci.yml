@@ -1,0 +1,48 @@
+# CI for the autodeliver tool repository itself: tests on Windows and Linux, then the distributables.
+trigger:
+  branches:
+    include: [main]
+  tags:
+    include: ["v*"]
+pr:
+  branches:
+    include: [main]
+
+jobs:
+  - job: test
+    strategy:
+      matrix:
+        linux:
+          vmImage: ubuntu-latest
+        windows:
+          vmImage: windows-latest
+    pool:
+      vmImage: $(vmImage)
+    steps:
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: "3.12"
+      - pwsh: |
+          python -m pip install --quiet --disable-pip-version-check ".[dev]"
+          python -m pytest -q
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          autodeliver --version
+        displayName: Install and test
+
+  - job: package
+    dependsOn: test
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - task: UsePythonVersion@0
+        inputs:
+          versionSpec: "3.12"
+      - pwsh: |
+          python -m pip install --quiet build
+          python -m build --wheel --sdist --outdir dist
+          python scripts/build_dist.py --out dist
+        displayName: Build wheel, .skill and .plugin
+      - task: PublishPipelineArtifact@1
+        inputs:
+          targetPath: dist
+          artifact: autodeliver-dist

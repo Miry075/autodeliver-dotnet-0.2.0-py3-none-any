@@ -1,0 +1,69 @@
+{
+  "type": "object",
+  "properties": {
+    "locations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": "integer"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "layer": {
+            "type": "string",
+            "enum": [
+              "domain",
+              "application",
+              "infrastructure",
+              "presentation",
+              "config",
+              "test",
+              "other"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "symbol",
+          "layer",
+          "note"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "test_projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "framework": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "framework"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "locations",
+    "test_projects"
+  ],
+  "additionalProperties": false
+}
